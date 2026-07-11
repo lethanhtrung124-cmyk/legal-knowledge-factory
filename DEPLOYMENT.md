@@ -20,6 +20,11 @@ Health Check Path: /healthz
 
 ```text
 MAX_UPLOAD_MB=25
+FRONTEND_ORIGIN=https://your-site-name.netlify.app
+SUPABASE_URL=https://xxxxx.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+SUPABASE_UPLOAD_BUCKET=legal-uploads
+SUPABASE_PACK_BUCKET=knowledge-packs
 ```
 
 Sau khi deploy xong, Render se cap URL dang:
@@ -81,6 +86,14 @@ to = "https://your-fastapi-backend.onrender.com/api/:splat"
 ```
 
 Khong de `http://127.0.0.1:8000` khi deploy Netlify public, vi dia chi nay chi ton tai tren may local cua ban.
+
+Thu tu deploy khuyen nghi:
+
+1. Deploy backend FastAPI tren Render va lay URL public.
+2. Sua `netlify.toml` de proxy `/api/*` sang URL Render.
+3. Commit va push thay doi len GitHub.
+4. Deploy frontend tren Netlify voi publish directory la `web`.
+5. Quay lai Render va cap nhat `FRONTEND_ORIGIN` bang URL Netlify that.
 
 Trong Netlify:
 

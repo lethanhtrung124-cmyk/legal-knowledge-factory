@@ -9,3 +9,13 @@ services:
     envVars:
       - key: MAX_UPLOAD_MB
         value: "25"
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_UPLOAD_BUCKET
+        value: "legal-uploads"
+      - key: SUPABASE_PACK_BUCKET
+        value: "knowledge-packs"

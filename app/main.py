@@ -4,9 +4,10 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from .config import ALLOWED_EXTENSIONS, MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, OUTPUT_DIR, UPLOAD_DIR
+from .config import ALLOWED_EXTENSIONS, FRONTEND_ORIGIN, MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, OUTPUT_DIR, UPLOAD_DIR
 from .document_processor import parse_document
 from .knowledge_pack import build_knowledge_pack
 
@@ -25,6 +26,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Legal Knowledge Factory", version="0.1.0", lifespan=lifespan)
+
+allowed_origins = [
+    origin.strip()
+    for origin in FRONTEND_ORIGIN.split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins or ["http://127.0.0.1:8000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Validation-Status"],
+)
 
 
 @app.get("/", response_class=HTMLResponse)
