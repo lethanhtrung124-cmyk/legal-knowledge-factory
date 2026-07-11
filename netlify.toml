@@ -2,10 +2,8 @@
   publish = "web"
   command = ""
 
-# TODO: Sau khi deploy backend tren Render/Railway, thay URL ben duoi bang URL FastAPI public.
-# Vi du: to = "https://legal-knowledge-factory.onrender.com/api/:splat"
 [[redirects]]
   from = "/api/*"
-  to = "http://127.0.0.1:8000/api/:splat"
+  to = "https://legal-knowledge-factory.onrender.com/api/:splat"
   status = 200
   force = true
