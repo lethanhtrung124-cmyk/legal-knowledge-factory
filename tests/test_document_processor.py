@@ -1,6 +1,7 @@
 from app.document_processor import (
     detect_document_number,
     detect_effective_date,
+    detect_issuing_authority,
     detect_title,
     detect_document_type,
     extract_closing_metadata,
@@ -189,3 +190,44 @@ def test_detect_effective_date_from_signing_date_phrase():
     )
 
     assert detect_effective_date(articles, "11/07/2026") == "Kể từ ngày ký ban hành (11/07/2026)"
+
+
+def test_issuing_authority_prefers_signature_authority_without_normalizing():
+    lines = [
+        "CHÍNH PHỦ",
+        "Số: 224/2026/NĐ-CP",
+        "NGHỊ ĐỊNH",
+        "Quy định chi tiết một số điều",
+        "Căn cứ Luật Chuyển đổi số số 148/2025/QH15;",
+    ]
+    closing_lines = ["Nơi nhận:", "- Như trên;", "TM. CHÍNH PHỦ", "KT. THỦ TƯỚNG", "PHÓ THỦ TƯỚNG"]
+
+    assert detect_issuing_authority(lines, "Nghị định", closing_lines) == "CHÍNH PHỦ"
+
+
+def test_issuing_authority_keeps_multiline_heading():
+    lines = [
+        "BỘ KHOA HỌC VÀ",
+        "CÔNG NGHỆ",
+        "Số: 01/2026/TT-BKHCN",
+        "THÔNG TƯ",
+        "Quy định về hồ sơ điện tử",
+        "Căn cứ Luật Giao dịch điện tử;",
+    ]
+
+    assert detect_issuing_authority(lines, "Thông tư") == "BỘ KHOA HỌC VÀ CÔNG NGHỆ"
+
+
+def test_effective_date_uses_only_effective_article_not_legal_basis_dates():
+    _, _, _, articles = parse_structure(
+        [
+            "Điều 1. Phạm vi điều chỉnh",
+            "Căn cứ Luật số 148/2025/QH15 ngày 14 tháng 6 năm 2025.",
+            "Điều 2. Trách nhiệm thi hành",
+            "Bộ trưởng tổ chức thi hành văn bản này.",
+            "Điều 3. Hiệu lực thi hành",
+            "Thông tư này có hiệu lực thi hành từ ngày 15 tháng 8 năm 2026.",
+        ]
+    )
+
+    assert detect_effective_date(articles) == "15/08/2026"

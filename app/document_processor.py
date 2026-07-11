@@ -116,13 +116,13 @@ def parse_document(path: Path) -> ParsedDocument:
         raise ValueError("Không đọc được nội dung văn bản hoặc file rỗng.")
 
     lines = [line.strip() for line in normalized.splitlines() if line.strip()]
+    main_lines, appendix_lines, closing_lines = split_main_appendix_closing(lines)
     document_type = detect_document_type(lines)
     document_number = detect_document_number(lines)
     issued_date = detect_issued_date(lines)
-    issuing_authority = normalize_authority(detect_issuing_authority(lines, document_type))
+    issuing_authority = detect_issuing_authority(lines, document_type, closing_lines)
     title = detect_title(lines, document_type)
     preamble_lines, legal_basis = split_preamble_and_basis(lines)
-    main_lines, appendix_lines, closing_lines = split_main_appendix_closing(lines)
     chapters, sections, subsections, articles = parse_structure(main_lines)
     appendices = parse_appendices(appendix_lines)
     definitions = extract_definitions(articles)
@@ -288,7 +288,11 @@ def detect_issued_date(lines: list[str]) -> str:
     return ""
 
 
-def detect_issuing_authority(lines: list[str], document_type: str) -> str:
+def detect_issuing_authority(lines: list[str], document_type: str, closing_lines: list[str] | None = None) -> str:
+    authority_from_signature = detect_issuing_authority_from_signature(closing_lines or [])
+    if authority_from_signature:
+        return authority_from_signature
+
     upper_type = document_type.upper()
     authority_markers = (
         "CHÍNH PHỦ",
@@ -302,7 +306,7 @@ def detect_issuing_authority(lines: list[str], document_type: str) -> str:
         "ỦY BAN NHÂN DÂN",
         "HỘI ĐỒNG NHÂN DÂN",
     )
-    for line in lines[:80]:
+    for index, line in enumerate(lines[:80]):
         if LEGAL_BASIS_RE.match(line):
             break
         compact = line.strip()
@@ -310,29 +314,55 @@ def detect_issuing_authority(lines: list[str], document_type: str) -> str:
         if not compact or "SỐ" == upper[:2] or DATE_RE.search(compact) or DATE_SLASH_RE.search(compact):
             continue
         if upper_type == "NGHỊ ĐỊNH" and "CHÍNH PHỦ" in upper:
-            return compact
+            return collect_authority_heading(lines, index)
         if upper_type == "THÔNG TƯ" and ("BỘ " in upper or "NGÂN HÀNG NHÀ NƯỚC" in upper):
-            return compact
+            return collect_authority_heading(lines, index)
         if upper_type == "QUYẾT ĐỊNH" and any(marker in upper for marker in ("THỦ TƯỚNG", "BỘ ", "ỦY BAN")):
-            return compact
+            return collect_authority_heading(lines, index)
         if upper_type == "LUẬT" and "QUỐC HỘI" in upper:
-            return compact
+            return collect_authority_heading(lines, index)
         if any(marker in upper for marker in authority_markers):
+            return collect_authority_heading(lines, index)
+    return ""
+
+
+def detect_issuing_authority_from_signature(lines: list[str]) -> str:
+    for line in lines:
+        compact = line.strip()
+        upper = compact.upper()
+        if upper.startswith("TM."):
+            return compact[3:].strip()
+        if upper.startswith(("KT.", "TL.", "TUQ.")):
+            continue
+        if upper in {"CHÍNH PHỦ", "QUỐC HỘI"} or upper.startswith(("BỘ ", "ỦY BAN NHÂN DÂN", "HỘI ĐỒNG NHÂN DÂN")):
             return compact
     return ""
 
 
-def normalize_authority(value: str) -> str:
-    upper = value.upper()
-    known = {
-        "CHÍNH PHỦ": "Chính phủ",
-        "QUỐC HỘI": "Quốc hội",
-        "THỦ TƯỚNG CHÍNH PHỦ": "Thủ tướng Chính phủ",
-    }
-    for marker, label in known.items():
-        if marker in upper:
-            return label
-    return value
+def collect_authority_heading(lines: list[str], start_index: int) -> str:
+    parts = [lines[start_index].strip()]
+    for line in lines[start_index + 1 : min(start_index + 6, len(lines))]:
+        compact = line.strip()
+        if not is_authority_heading_continuation(compact):
+            break
+        parts.append(compact)
+    return " ".join(parts)
+
+
+def is_authority_heading_continuation(line: str) -> bool:
+    if not line:
+        return False
+    if DATE_RE.search(line) or DATE_SLASH_RE.search(line):
+        return False
+    if re.match(r"^(Số|CỘNG\s+HÒA|Độc\s+lập|Hà\s+Nội|TP\.|Luật\s+số|Nghị\s+định\s+số|Thông\s+tư\s+số|Quyết\s+định\s+số)\b", line, flags=re.IGNORECASE):
+        return False
+    if DOCUMENT_KIND_HEADING_RE.match(line) or TYPE_NUMBER_RE.match(line) or DOCUMENT_NUMBER_RE.search(line):
+        return False
+    letters = [char for char in line if char.isalpha()]
+    if not letters:
+        return False
+    uppercase_ratio = sum(1 for char in letters if char.isupper()) / len(letters)
+    return uppercase_ratio >= 0.75
 
 
 def detect_title(lines: list[str], document_type: str) -> str:
@@ -588,22 +618,31 @@ def detect_applicable_subjects(articles: list[Article]) -> str:
 
 
 def detect_effective_date(articles: list[Article], issued_date: str = "") -> str:
-    for article in articles[-8:]:
-        text = article.raw_content
-        lowered = text.lower()
-        if "hiệu lực" not in lowered and "ngày ký" not in lowered:
-            continue
-        slash_match = DATE_SLASH_RE.search(text)
-        if slash_match:
-            day, month, year = slash_match.groups()
-            return f"{int(day):02d}/{int(month):02d}/{year}"
-        long_date = DATE_RE.search(text)
-        if long_date:
-            day, month, year = long_date.groups()
-            return f"{int(day):02d}/{int(month):02d}/{year}"
-        if "kể từ ngày ký" in lowered or "từ ngày ký" in lowered:
-            return f"Kể từ ngày ký ban hành ({issued_date})" if issued_date else "Kể từ ngày ký ban hành"
+    article = find_effective_article(articles)
+    if not article:
+        return ""
+    text = article.raw_content
+    slash_match = DATE_SLASH_RE.search(text)
+    if slash_match:
+        day, month, year = slash_match.groups()
+        return f"{int(day):02d}/{int(month):02d}/{year}"
+    long_date = DATE_RE.search(text)
+    if long_date:
+        day, month, year = long_date.groups()
+        return f"{int(day):02d}/{int(month):02d}/{year}"
+    lowered = text.lower()
+    if "kể từ ngày ký" in lowered or "từ ngày ký" in lowered:
+        return f"Kể từ ngày ký ban hành ({issued_date})" if issued_date else "Kể từ ngày ký ban hành"
     return ""
+
+
+def find_effective_article(articles: list[Article]) -> Article | None:
+    for article in articles:
+        title = article.title.lower()
+        first_line = article.raw_content.splitlines()[0].lower() if article.raw_content else ""
+        if "hiệu lực thi hành" in title or "hiệu lực thi hành" in first_line:
+            return article
+    return None
 
 
 def extract_closing_metadata(lines: list[str]) -> tuple[list[str], str]:
