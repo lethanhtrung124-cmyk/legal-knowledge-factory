@@ -1,0 +1,552 @@
+import logging
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Iterable
+
+from docx import Document
+from docx.document import Document as DocxDocument
+from docx.oxml.table import CT_Tbl
+from docx.oxml.text.paragraph import CT_P
+from docx.table import Table
+from docx.text.paragraph import Paragraph
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Article:
+    number: str
+    title: str
+    raw_content: str
+    clauses: list[str] = field(default_factory=list)
+    points: list[str] = field(default_factory=list)
+    chapter: str = ""
+    section: str = ""
+    subsection: str = ""
+
+
+@dataclass
+class Appendix:
+    number: str
+    title: str
+    raw_content: str
+    kind: str = "phu_luc"
+
+
+@dataclass
+class ParsedDocument:
+    file_name: str
+    document_type: str
+    document_number: str
+    issued_date: str
+    issuing_authority: str
+    title: str
+    raw_text: str
+    preamble: str
+    legal_basis: list[str]
+    scope: str
+    main_text: str
+    appendix_text: str
+    chapters: list[str]
+    sections: list[str]
+    subsections: list[str]
+    articles: list[Article]
+    appendices: list[Appendix]
+    definitions: list[str]
+    warnings: list[str] = field(default_factory=list)
+
+
+ARTICLE_RE = re.compile(r"^Điều\s+(\d+[a-zA-Z]?)\.\s*(.*)$", re.IGNORECASE)
+CHAPTER_RE = re.compile(r"^Chương\s+([IVXLCDM]+|\d+)\b\.?\s*(.*)$", re.IGNORECASE)
+SECTION_RE = re.compile(r"^Mục\s+(\d+)\b\.?\s*(.*)$", re.IGNORECASE)
+SUBSECTION_RE = re.compile(r"^Tiểu\s+mục\s+(\d+)\b\.?\s*(.*)$", re.IGNORECASE)
+CLAUSE_RE = re.compile(r"^(\d+)\.\s+")
+POINT_RE = re.compile(r"^([a-zđ])\)\s+", re.IGNORECASE)
+APPENDIX_RE = re.compile(r"^(PHỤ\s+LỤC|Phụ\s+lục)\s*([IVXLCDM\dA-Z]*)\b\.?\s*(.*)$", re.IGNORECASE)
+FORM_RE = re.compile(r"^(Mẫu\s+số|Biểu\s+mẫu)\s*([A-Za-z0-9./-]*)\b\.?\s*(.*)$", re.IGNORECASE)
+ATTACHED_RE = re.compile(r"ban\s+hành\s+kèm\s+theo", re.IGNORECASE)
+DOCUMENT_KIND_NAMES = ("Luật", "Nghị định", "Thông tư", "Quyết định", "Công văn")
+DOCUMENT_KIND_HEADING_RE = re.compile(r"^(LUẬT|NGHỊ\s+ĐỊNH|THÔNG\s+TƯ|QUYẾT\s+ĐỊNH|CÔNG\s+VĂN)$", re.IGNORECASE)
+TYPE_NUMBER_RE = re.compile(
+    r"^(Luật|Nghị\s+định|Thông\s+tư|Quyết\s+định|Công\s+văn)\s+số\s*:?\s*"
+    r"([0-9]+(?:/[0-9]{4})?/[A-ZĐ0-9]{1,12}(?:-[A-ZĐ0-9]{1,12})*)\b",
+    re.IGNORECASE,
+)
+DOCUMENT_NUMBER_RE = re.compile(
+    r"\bSố\s*:?\s*([0-9]+(?:/[0-9]{4})?/[A-ZĐ0-9]{1,12}(?:-[A-ZĐ0-9]{1,12})*)",
+    re.IGNORECASE,
+)
+DATE_RE = re.compile(
+    r"(?:ngày|ngày\s+ban\s+hành)\s+(\d{1,2})\s+tháng\s+(\d{1,2})\s+năm\s+(\d{4})",
+    re.IGNORECASE,
+)
+DATE_SLASH_RE = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b")
+LEGAL_BASIS_RE = re.compile(r"^(Căn cứ|Theo đề nghị|Xét đề nghị)\b", re.IGNORECASE)
+MAIN_START_RE = re.compile(r"^(Chương\s+|Điều\s+1\.)", re.IGNORECASE)
+
+
+def parse_document(path: Path) -> ParsedDocument:
+    suffix = path.suffix.lower()
+    logger.info("Reading document %s", path.name)
+
+    if suffix == ".docx":
+        raw_text = read_docx(path)
+    elif suffix == ".pdf":
+        raw_text = read_pdf(path)
+    else:
+        raise ValueError("Định dạng file không được hỗ trợ.")
+
+    normalized = normalize_text(raw_text)
+    if not normalized.strip():
+        raise ValueError("Không đọc được nội dung văn bản hoặc file rỗng.")
+
+    lines = [line.strip() for line in normalized.splitlines() if line.strip()]
+    document_type = detect_document_type(lines)
+    document_number = detect_document_number(lines)
+    issued_date = detect_issued_date(lines)
+    issuing_authority = normalize_authority(detect_issuing_authority(lines, document_type))
+    title = detect_title(lines, document_type)
+    preamble_lines, legal_basis = split_preamble_and_basis(lines)
+    main_lines, appendix_lines = split_main_and_appendix(lines)
+    chapters, sections, subsections, articles = parse_structure(main_lines)
+    appendices = parse_appendices(appendix_lines)
+    definitions = extract_definitions(articles)
+    scope = detect_scope(articles)
+    warnings = collect_parse_warnings(
+        document_number=document_number,
+        issued_date=issued_date,
+        issuing_authority=issuing_authority,
+        articles=articles,
+        appendices=appendices,
+    )
+
+    logger.info(
+        "Parsed %s: type=%s number=%s articles=%s appendices=%s",
+        path.name,
+        document_type,
+        document_number,
+        len(articles),
+        len(appendices),
+    )
+
+    return ParsedDocument(
+        file_name=path.name,
+        document_type=document_type,
+        document_number=document_number,
+        issued_date=issued_date,
+        issuing_authority=issuing_authority,
+        title=title,
+        raw_text=normalized,
+        preamble="\n".join(preamble_lines),
+        legal_basis=legal_basis,
+        scope=scope,
+        main_text="\n".join(main_lines),
+        appendix_text="\n".join(appendix_lines),
+        chapters=chapters,
+        sections=sections,
+        subsections=subsections,
+        articles=articles,
+        appendices=appendices,
+        definitions=definitions,
+        warnings=warnings,
+    )
+
+
+def read_docx(path: Path) -> str:
+    try:
+        doc = Document(path)
+        lines: list[str] = []
+        for section in doc.sections:
+            for container in (section.header, section.footer):
+                lines.extend(read_docx_container(container))
+        lines.extend(read_docx_container(doc))
+        return "\n".join(unique_lines_preserve_order(lines))
+    except Exception as exc:
+        logger.exception("Could not read docx %s", path)
+        raise ValueError("Không đọc được file .docx.") from exc
+
+
+def read_docx_container(container) -> list[str]:
+    lines: list[str] = []
+    for block in iter_block_items(container):
+        if isinstance(block, Paragraph):
+            text = block.text.strip()
+            if text:
+                lines.append(text)
+        elif isinstance(block, Table):
+            for row in block.rows:
+                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if cells:
+                    for cell in cells:
+                        lines.extend(line.strip() for line in cell.splitlines() if line.strip())
+    return lines
+
+
+def iter_block_items(parent):
+    parent_elm = parent.element.body if isinstance(parent, DocxDocument) else parent._element
+    for child in parent_elm.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, parent)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, parent)
+
+
+def unique_lines_preserve_order(lines: list[str]) -> list[str]:
+    output: list[str] = []
+    for line in lines:
+        if not output or output[-1] != line:
+            output.append(line)
+    return output
+
+
+def read_pdf(path: Path) -> str:
+    try:
+        import fitz
+
+        with fitz.open(path) as pdf:
+            return "\n".join(page.get_text("text") for page in pdf)
+    except Exception as pymupdf_exc:
+        logger.warning("PyMuPDF failed for %s: %s", path.name, pymupdf_exc)
+
+    try:
+        import pdfplumber
+
+        with pdfplumber.open(path) as pdf:
+            return "\n".join((page.extract_text() or "") for page in pdf.pages)
+    except Exception as exc:
+        logger.exception("Could not read pdf %s", path)
+        raise ValueError("Không đọc được file .pdf.") from exc
+
+
+def normalize_text(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def detect_document_type(lines: Iterable[str]) -> str:
+    for line in lines_before_basis(list(lines)[:120]):
+        type_number_match = TYPE_NUMBER_RE.match(line)
+        if type_number_match:
+            return normalize_document_type(type_number_match.group(1))
+
+        heading_match = DOCUMENT_KIND_HEADING_RE.match(line.strip())
+        if heading_match:
+            return normalize_document_type(heading_match.group(1))
+    return "Văn bản pháp luật"
+
+
+def detect_document_number(lines: list[str]) -> str:
+    for line in lines[:80]:
+        if LEGAL_BASIS_RE.match(line):
+            break
+        type_number_match = TYPE_NUMBER_RE.match(line)
+        if type_number_match:
+            return type_number_match.group(2)
+        match = DOCUMENT_NUMBER_RE.search(line)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def detect_issued_date(lines: list[str]) -> str:
+    for line in lines[:120]:
+        if LEGAL_BASIS_RE.match(line):
+            break
+        match = DATE_RE.search(line)
+        if match:
+            day, month, year = match.groups()
+            return f"{int(day):02d}/{int(month):02d}/{year}"
+        slash_match = DATE_SLASH_RE.search(line)
+        if slash_match:
+            day, month, year = slash_match.groups()
+            return f"{int(day):02d}/{int(month):02d}/{year}"
+    return ""
+
+
+def detect_issuing_authority(lines: list[str], document_type: str) -> str:
+    upper_type = document_type.upper()
+    authority_markers = (
+        "CHÍNH PHỦ",
+        "QUỐC HỘI",
+        "ỦY BAN THƯỜNG VỤ QUỐC HỘI",
+        "THỦ TƯỚNG CHÍNH PHỦ",
+        "BỘ ",
+        "NGÂN HÀNG NHÀ NƯỚC",
+        "TÒA ÁN NHÂN DÂN TỐI CAO",
+        "VIỆN KIỂM SÁT NHÂN DÂN TỐI CAO",
+        "ỦY BAN NHÂN DÂN",
+        "HỘI ĐỒNG NHÂN DÂN",
+    )
+    for line in lines[:80]:
+        if LEGAL_BASIS_RE.match(line):
+            break
+        compact = line.strip()
+        upper = compact.upper()
+        if not compact or "SỐ" == upper[:2] or DATE_RE.search(compact) or DATE_SLASH_RE.search(compact):
+            continue
+        if upper_type == "NGHỊ ĐỊNH" and "CHÍNH PHỦ" in upper:
+            return compact
+        if upper_type == "THÔNG TƯ" and ("BỘ " in upper or "NGÂN HÀNG NHÀ NƯỚC" in upper):
+            return compact
+        if upper_type == "QUYẾT ĐỊNH" and any(marker in upper for marker in ("THỦ TƯỚNG", "BỘ ", "ỦY BAN")):
+            return compact
+        if upper_type == "LUẬT" and "QUỐC HỘI" in upper:
+            return compact
+        if any(marker in upper for marker in authority_markers):
+            return compact
+    return ""
+
+
+def normalize_authority(value: str) -> str:
+    upper = value.upper()
+    known = {
+        "CHÍNH PHỦ": "Chính phủ",
+        "QUỐC HỘI": "Quốc hội",
+        "THỦ TƯỚNG CHÍNH PHỦ": "Thủ tướng Chính phủ",
+    }
+    for marker, label in known.items():
+        if marker in upper:
+            return label
+    return value
+
+
+def detect_title(lines: list[str], document_type: str) -> str:
+    stop_markers = (
+        "căn cứ",
+        "theo đề nghị",
+        "xét đề nghị",
+        "chương ",
+        "điều ",
+        "nghị định này",
+        "thông tư này",
+        "quyết định này",
+        "luật này",
+    )
+    type_index = -1
+    for index, line in enumerate(lines[:120]):
+        if LEGAL_BASIS_RE.match(line) or MAIN_START_RE.match(line):
+            break
+        if TYPE_NUMBER_RE.match(line) and normalize_document_type(TYPE_NUMBER_RE.match(line).group(1)) == document_type:
+            type_index = index
+            break
+        heading_match = DOCUMENT_KIND_HEADING_RE.match(line.strip())
+        if heading_match and normalize_document_type(heading_match.group(1)) == document_type:
+            type_index = index
+            break
+    if type_index >= 0:
+        title_lines: list[str] = []
+        for next_line in lines[type_index + 1 : min(type_index + 10, len(lines))]:
+            lowered = next_line.lower()
+            if lowered.startswith(stop_markers):
+                break
+            if TYPE_NUMBER_RE.match(next_line) or DOCUMENT_KIND_HEADING_RE.match(next_line.strip()):
+                continue
+            if re.search(r"^(Số|CỘNG HÒA|Độc lập|Hà Nội|TP\.)\b", next_line, flags=re.IGNORECASE):
+                continue
+            if len(next_line) > 260:
+                break
+            title_lines.append(next_line)
+        title = " ".join(title_lines).strip()[:300] or lines[type_index][:300]
+        return normalize_title(title)
+    return lines[0][:300] if lines else "Văn bản pháp luật"
+
+
+def lines_before_basis(lines: list[str]) -> list[str]:
+    output: list[str] = []
+    for line in lines:
+        if LEGAL_BASIS_RE.match(line):
+            break
+        output.append(line)
+    return output
+
+
+def normalize_document_type(value: str) -> str:
+    compact = re.sub(r"\s+", " ", value.strip()).lower()
+    mapping = {
+        "luật": "Luật",
+        "nghị định": "Nghị định",
+        "thông tư": "Thông tư",
+        "quyết định": "Quyết định",
+        "công văn": "Công văn",
+    }
+    return mapping.get(compact, value.strip())
+
+
+def normalize_title(value: str) -> str:
+    compact = re.sub(r"\s+", " ", value).strip()
+    letters = [char for char in compact if char.isalpha()]
+    if letters and sum(1 for char in letters if char.isupper()) / len(letters) > 0.8:
+        compact = compact.lower()
+        compact = compact[:1].upper() + compact[1:]
+        replacements = {
+            "luật chuyển đổi số": "Luật Chuyển đổi số",
+            "luật": "Luật",
+            "nghị định": "Nghị định",
+            "thông tư": "Thông tư",
+            "quyết định": "Quyết định",
+        }
+        for old, new in replacements.items():
+            compact = compact.replace(old, new)
+    return compact
+
+
+def split_preamble_and_basis(lines: list[str]) -> tuple[list[str], list[str]]:
+    preamble: list[str] = []
+    basis: list[str] = []
+    in_basis = False
+    for line in lines:
+        if MAIN_START_RE.match(line):
+            break
+        if LEGAL_BASIS_RE.match(line):
+            in_basis = True
+        if in_basis:
+            basis.append(line)
+        else:
+            preamble.append(line)
+    return preamble, basis
+
+
+def split_main_and_appendix(lines: list[str]) -> tuple[list[str], list[str]]:
+    main_start = 0
+    for index, line in enumerate(lines):
+        if MAIN_START_RE.match(line):
+            main_start = index
+            break
+
+    for index, line in enumerate(lines[main_start:], start=main_start):
+        if is_appendix_start(line):
+            return lines[main_start:index], lines[index:]
+    return lines[main_start:], []
+
+
+def is_appendix_start(line: str) -> bool:
+    return bool(APPENDIX_RE.match(line) or FORM_RE.match(line) or ATTACHED_RE.search(line))
+
+
+def parse_structure(lines: list[str]) -> tuple[list[str], list[str], list[str], list[Article]]:
+    chapters: list[str] = []
+    sections: list[str] = []
+    subsections: list[str] = []
+    articles: list[Article] = []
+    current_article: Article | None = None
+    current_chapter = ""
+    current_section = ""
+    current_subsection = ""
+
+    for line in lines:
+        if is_appendix_start(line):
+            break
+
+        chapter_match = CHAPTER_RE.match(line)
+        if chapter_match:
+            current_chapter = line
+            current_section = ""
+            current_subsection = ""
+            chapters.append(line)
+            continue
+
+        section_match = SECTION_RE.match(line)
+        if section_match:
+            current_section = line
+            current_subsection = ""
+            sections.append(line)
+            continue
+
+        subsection_match = SUBSECTION_RE.match(line)
+        if subsection_match:
+            current_subsection = line
+            subsections.append(line)
+            continue
+
+        article_match = ARTICLE_RE.match(line)
+        if article_match:
+            current_article = Article(
+                number=article_match.group(1),
+                title=article_match.group(2).strip(),
+                raw_content=line,
+                chapter=current_chapter,
+                section=current_section,
+                subsection=current_subsection,
+            )
+            articles.append(current_article)
+            continue
+
+        if current_article:
+            current_article.raw_content += "\n" + line
+            if CLAUSE_RE.match(line):
+                current_article.clauses.append(line)
+            if POINT_RE.match(line):
+                current_article.points.append(line)
+
+    return chapters, sections, subsections, articles
+
+
+def parse_appendices(lines: list[str]) -> list[Appendix]:
+    appendices: list[Appendix] = []
+    current: Appendix | None = None
+
+    for line in lines:
+        appendix_match = APPENDIX_RE.match(line)
+        form_match = FORM_RE.match(line)
+        if appendix_match or form_match:
+            match = appendix_match or form_match
+            kind = "phu_luc" if appendix_match else "mau_so"
+            number = match.group(2).strip() or f"{len(appendices) + 1:02d}"
+            title = match.group(3).strip()
+            current = Appendix(number=number, title=title, raw_content=line, kind=kind)
+            appendices.append(current)
+            continue
+
+        if current:
+            current.raw_content += "\n" + line
+        elif line.strip():
+            current = Appendix(number=f"{len(appendices) + 1:02d}", title="Phụ lục", raw_content=line)
+            appendices.append(current)
+
+    return appendices
+
+
+def extract_definitions(articles: list[Article]) -> list[str]:
+    definitions: list[str] = []
+    definition_markers = ("giải thích từ ngữ", "được hiểu là", "trong văn bản này")
+    for article in articles:
+        lowered = article.raw_content.lower()
+        if any(marker in lowered for marker in definition_markers):
+            definitions.append(f"Điều {article.number}. {article.title}\n{article.raw_content}")
+    return definitions
+
+
+def detect_scope(articles: list[Article]) -> str:
+    for article in articles[:5]:
+        text = article.raw_content.lower()
+        if "phạm vi điều chỉnh" in text or "đối tượng áp dụng" in text:
+            return article.raw_content
+    return ""
+
+
+def collect_parse_warnings(
+    document_number: str,
+    issued_date: str,
+    issuing_authority: str,
+    articles: list[Article],
+    appendices: list[Appendix],
+) -> list[str]:
+    warnings: list[str] = []
+    if not document_number:
+        warnings.append("Thiếu số/ký hiệu văn bản.")
+    if not issued_date:
+        warnings.append("Thiếu ngày ban hành.")
+    if not issuing_authority:
+        warnings.append("Thiếu cơ quan ban hành.")
+    if not articles:
+        warnings.append("Không phát hiện điều khoản chính.")
+    appendix_text = "\n".join(appendix.raw_content for appendix in appendices)
+    appendix_article_numbers = set(re.findall(r"Điều\s+(\d+[a-zA-Z]?)\.", appendix_text, flags=re.IGNORECASE))
+    article_numbers = {article.number for article in articles}
+    overlap = sorted(article_numbers.intersection(appendix_article_numbers))
+    if overlap:
+        warnings.append(f"Phụ lục có số điều trùng điều chính: {', '.join(overlap)}.")
+    return warnings

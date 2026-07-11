@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Legal Knowledge Factory</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main>
+    <h1>Legal Knowledge Factory</h1>
+    <p class="subtitle">Tải lên văn bản pháp luật Việt Nam dạng .docx hoặc .pdf và tạo Legal Knowledge Pack 1.0 để nạp vào Custom GPT.</p>
+
+    <section class="workspace">
+      <form id="packForm">
+        <div class="upload-row">
+          <label class="file-label" for="fileInput">
+            <span id="fileName" class="file-name">Chưa chọn file</span>
+            <span class="file-pill">Chọn .docx hoặc .pdf</span>
+          </label>
+          <input id="fileInput" type="file" accept=".docx,.pdf" />
+          <button id="submitButton" type="submit" disabled>Tạo Knowledge Pack</button>
+        </div>
+      </form>
+      <div id="status" class="status"></div>
+      <div id="downloadArea" class="download-area"></div>
+      <div class="notes">
+        Netlify chỉ chạy giao diện. Engine xử lý văn bản chạy ở FastAPI backend và được gọi qua đường dẫn /api/knowledge-pack.
+      </div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

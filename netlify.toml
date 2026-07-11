@@ -1,0 +1,11 @@
+[build]
+  publish = "web"
+  command = ""
+
+# Thay URL ben duoi bang URL FastAPI public cua ban sau khi deploy backend
+# Vi du: https://legal-knowledge-factory.onrender.com/api/:splat
+[[redirects]]
+  from = "/api/*"
+  to = "http://127.0.0.1:8000/api/:splat"
+  status = 200
+  force = true
