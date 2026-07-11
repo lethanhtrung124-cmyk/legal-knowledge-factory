@@ -71,15 +71,15 @@ POINT_RE = re.compile(r"^([a-zđ])\)\s+", re.IGNORECASE)
 APPENDIX_RE = re.compile(r"^(PHỤ\s+LỤC|Phụ\s+lục)\s*([IVXLCDM\dA-Z]*)\b\.?\s*(.*)$", re.IGNORECASE)
 FORM_RE = re.compile(r"^(Mẫu\s+số|Biểu\s+mẫu)\s*([A-Za-z0-9./-]*)\b\.?\s*(.*)$", re.IGNORECASE)
 ATTACHED_RE = re.compile(r"ban\s+hành\s+kèm\s+theo", re.IGNORECASE)
-DOCUMENT_KIND_NAMES = ("Luật", "Nghị định", "Thông tư", "Quyết định", "Công văn")
-DOCUMENT_KIND_HEADING_RE = re.compile(r"^(LUẬT|NGHỊ\s+ĐỊNH|THÔNG\s+TƯ|QUYẾT\s+ĐỊNH|CÔNG\s+VĂN)$", re.IGNORECASE)
+DOCUMENT_KIND_NAMES = ("Luật", "Nghị định", "Nghị quyết", "Thông tư", "Quyết định", "Công văn")
+DOCUMENT_KIND_HEADING_RE = re.compile(r"^(LUẬT|NGHỊ\s+ĐỊNH|NGHỊ\s+QUYẾT|THÔNG\s+TƯ|QUYẾT\s+ĐỊNH|CÔNG\s+VĂN)$", re.IGNORECASE)
 TYPE_NUMBER_RE = re.compile(
-    r"^(Luật|Nghị\s+định|Thông\s+tư|Quyết\s+định|Công\s+văn)\s+số\s*:?\s*"
-    r"([0-9]+(?:/[0-9]{4})?/[A-ZĐ0-9]{1,12}(?:-[A-ZĐ0-9]{1,12})*)\b",
+    r"^(Luật|Nghị\s+định|Nghị\s+quyết|Thông\s+tư|Quyết\s+định|Công\s+văn)\s+số\s*:?\s*"
+    r"([0-9]+(?:\.[0-9]+)*(?:/[0-9]{4})?/[A-ZĐ0-9]{1,12}(?:-[A-ZĐ0-9]{1,12})*)\b",
     re.IGNORECASE,
 )
 DOCUMENT_NUMBER_RE = re.compile(
-    r"\bSố\s*:?\s*([0-9]+(?:/[0-9]{4})?/[A-ZĐ0-9]{1,12}(?:-[A-ZĐ0-9]{1,12})*)",
+    r"\bSố\s*:?\s*([0-9]+(?:\.[0-9]+)*(?:/[0-9]{4})?/[A-ZĐ0-9]{1,12}(?:-[A-ZĐ0-9]{1,12})*)",
     re.IGNORECASE,
 )
 DATE_RE = re.compile(
@@ -321,6 +321,8 @@ def detect_issuing_authority(lines: list[str], document_type: str, closing_lines
             continue
         if upper_type == "NGHỊ ĐỊNH" and "CHÍNH PHỦ" in upper:
             return normalize_authority_name(collect_authority_heading(lines, index))
+        if upper_type == "NGHỊ QUYẾT" and ("CHÍNH PHỦ" in upper or "QUỐC HỘI" in upper or "ỦY BAN THƯỜNG VỤ QUỐC HỘI" in upper):
+            return normalize_authority_name(collect_authority_heading(lines, index))
         if upper_type == "THÔNG TƯ" and ("BỘ " in upper or "NGÂN HÀNG NHÀ NƯỚC" in upper):
             return normalize_authority_name(collect_authority_heading(lines, index))
         if upper_type == "QUYẾT ĐỊNH" and any(marker in upper for marker in ("THỦ TƯỚNG", "BỘ ", "ỦY BAN")):
@@ -432,6 +434,7 @@ def detect_title(lines: list[str], document_type: str) -> str:
         "chương ",
         "điều ",
         "nghị định này",
+        "nghị quyết này",
         "thông tư này",
         "quyết định này",
         "luật này",
@@ -481,6 +484,7 @@ def normalize_document_type(value: str) -> str:
     mapping = {
         "luật": "Luật",
         "nghị định": "Nghị định",
+        "nghị quyết": "Nghị quyết",
         "thông tư": "Thông tư",
         "quyết định": "Quyết định",
         "công văn": "Công văn",
@@ -498,6 +502,7 @@ def normalize_title(value: str) -> str:
             "luật chuyển đổi số": "Luật Chuyển đổi số",
             "luật": "Luật",
             "nghị định": "Nghị định",
+            "nghị quyết": "Nghị quyết",
             "thông tư": "Thông tư",
             "quyết định": "Quyết định",
         }

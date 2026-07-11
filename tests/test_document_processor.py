@@ -29,6 +29,19 @@ def test_metadata_parser_prefers_number_line_before_legal_basis():
     assert detect_document_number(lines) == "224/2026/NĐ-CP"
 
 
+def test_metadata_parser_handles_resolution_number_with_dot():
+    lines = [
+        "CHÍNH PHỦ",
+        "Số: 66.17/2026/NQ-CP",
+        "NGHỊ QUYẾT",
+        "Cắt giảm, sửa đổi ngành, nghề đầu tư kinh doanh có điều kiện",
+        "Căn cứ Luật Tổ chức Chính phủ số 63/2025/QH15;",
+    ]
+
+    assert detect_document_type(lines) == "Nghị quyết"
+    assert detect_document_number(lines) == "66.17/2026/NQ-CP"
+
+
 def test_metadata_parser_handles_law_number_line_without_cutting_suffix():
     lines = [
         "Luật số: 148/2025/QH15",
