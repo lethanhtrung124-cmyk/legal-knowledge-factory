@@ -205,7 +205,7 @@ def test_issuing_authority_prefers_signature_authority_without_normalizing():
     ]
     closing_lines = ["Nơi nhận:", "- Như trên;", "TM. CHÍNH PHỦ", "KT. THỦ TƯỚNG", "PHÓ THỦ TƯỚNG"]
 
-    assert detect_issuing_authority(lines, "Nghị định", closing_lines) == "CHÍNH PHỦ"
+    assert detect_issuing_authority(lines, "Nghị định", closing_lines) == "Chính phủ"
 
 
 def test_issuing_authority_keeps_multiline_heading():
@@ -218,7 +218,7 @@ def test_issuing_authority_keeps_multiline_heading():
         "Căn cứ Luật Giao dịch điện tử;",
     ]
 
-    assert detect_issuing_authority(lines, "Thông tư") == "BỘ KHOA HỌC VÀ CÔNG NGHỆ"
+    assert detect_issuing_authority(lines, "Thông tư") == "Bộ Khoa học và Công nghệ"
 
 
 def test_effective_date_uses_only_effective_article_not_legal_basis_dates():
@@ -246,7 +246,7 @@ def test_issuing_authority_does_not_use_signer_title_for_circular():
     ]
     closing_lines = ["Nơi nhận:", "- Như trên;", "BỘ TRƯỞNG", "Nguyễn Văn A"]
 
-    assert detect_issuing_authority(lines, "Thông tư", closing_lines) == "BỘ KHOA HỌC VÀ CÔNG NGHỆ"
+    assert detect_issuing_authority(lines, "Thông tư", closing_lines) == "Bộ Khoa học và Công nghệ"
 
 
 def test_applicable_subjects_are_normalized_list_not_raw_article():
@@ -263,6 +263,33 @@ def test_applicable_subjects_are_normalized_list_not_raw_article():
 
     assert result == "- cơ quan nhà nước\n- tổ chức cung cấp dịch vụ\n- cá nhân có liên quan"
     assert "Điều 2" not in result
+
+
+def test_metadata_scope_and_subjects_have_fallbacks():
+    from app.document_processor import detect_scope
+
+    articles = [
+        Article(
+            number="1",
+            title="Quy định chung",
+            raw_content="Điều 1. Quy định chung\nThông tư này quy định về hồ sơ điện tử của cơ quan, tổ chức, cá nhân.",
+        )
+    ]
+
+    assert detect_scope(articles) == "Thông tư này quy định về hồ sơ điện tử của cơ quan, tổ chức, cá nhân."
+    assert detect_applicable_subjects(articles) == "- Thông tư này quy định về hồ sơ điện tử của cơ quan, tổ chức, cá nhân"
+
+
+def test_authority_name_is_normalized_to_official_casing():
+    lines = [
+        "bộ tài chính",
+        "Số: 01/2026/TT-BTC",
+        "THÔNG TƯ",
+        "Quy định về quản lý tài chính",
+        "Căn cứ Luật Ngân sách nhà nước;",
+    ]
+
+    assert detect_issuing_authority(lines, "Thông tư") == "Bộ Tài chính"
 
 
 def test_validation_fails_when_issuing_authority_is_signer_title():
@@ -297,3 +324,38 @@ def test_validation_fails_when_issuing_authority_is_signer_title():
 
     assert validation.status == "FAIL"
     assert any("chức danh người ký" in error for error in validation.errors)
+
+
+def test_validation_fails_when_required_metadata_is_empty():
+    from app.document_processor import ParsedDocument
+
+    article = Article(number="1", title="Quy định chung", raw_content="Điều 1. Quy định chung\nNội dung.")
+    parsed = ParsedDocument(
+        file_name="test.docx",
+        document_type="Thông tư",
+        document_number="01/2026/TT-BTC",
+        issued_date="01/01/2026",
+        effective_date="",
+        issuing_authority="Bộ Tài chính",
+        title="Quy định thử nghiệm",
+        raw_text="",
+        preamble="",
+        legal_basis=[],
+        scope="",
+        applicable_subjects="",
+        main_text="",
+        appendix_text="",
+        closing_text="",
+        chapters=[],
+        sections=[],
+        subsections=[],
+        articles=[article],
+        appendices=[],
+        definitions=[],
+    )
+
+    validation = validate_pack(parsed, build_article_knowledge(parsed))
+
+    assert validation.status == "FAIL"
+    assert "Thiếu phạm vi điều chỉnh." in validation.errors
+    assert "Thiếu đối tượng áp dụng." in validation.errors

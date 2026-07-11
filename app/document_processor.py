@@ -295,7 +295,7 @@ def detect_issued_date(lines: list[str]) -> str:
 def detect_issuing_authority(lines: list[str], document_type: str, closing_lines: list[str] | None = None) -> str:
     authority_from_signature = detect_issuing_authority_from_signature(closing_lines or [])
     if authority_from_signature:
-        return authority_from_signature
+        return normalize_authority_name(authority_from_signature)
 
     upper_type = document_type.upper()
     authority_markers = (
@@ -320,15 +320,15 @@ def detect_issuing_authority(lines: list[str], document_type: str, closing_lines
         if is_signer_title(compact):
             continue
         if upper_type == "NGHỊ ĐỊNH" and "CHÍNH PHỦ" in upper:
-            return collect_authority_heading(lines, index)
+            return normalize_authority_name(collect_authority_heading(lines, index))
         if upper_type == "THÔNG TƯ" and ("BỘ " in upper or "NGÂN HÀNG NHÀ NƯỚC" in upper):
-            return collect_authority_heading(lines, index)
+            return normalize_authority_name(collect_authority_heading(lines, index))
         if upper_type == "QUYẾT ĐỊNH" and any(marker in upper for marker in ("THỦ TƯỚNG", "BỘ ", "ỦY BAN")):
-            return collect_authority_heading(lines, index)
+            return normalize_authority_name(collect_authority_heading(lines, index))
         if upper_type == "LUẬT" and "QUỐC HỘI" in upper:
-            return collect_authority_heading(lines, index)
+            return normalize_authority_name(collect_authority_heading(lines, index))
         if any(marker in upper for marker in authority_markers):
-            return collect_authority_heading(lines, index)
+            return normalize_authority_name(collect_authority_heading(lines, index))
     return ""
 
 
@@ -385,6 +385,37 @@ def is_signer_title(value: str) -> bool:
     if upper.startswith(("BỘ TRƯỞNG BỘ ", "THỦ TRƯỞNG CƠ QUAN ")):
         return False
     return bool(SIGNER_ONLY_TITLE_RE.match(without_tm))
+
+
+def normalize_authority_name(value: str) -> str:
+    compact = re.sub(r"\s+", " ", value.strip())
+    if not compact:
+        return ""
+    letters = [char for char in compact if char.isalpha()]
+    if letters and (
+        sum(1 for char in letters if char.isupper()) / len(letters) > 0.75
+        or compact == compact.lower()
+    ):
+        compact = " ".join(word[:1].upper() + word[1:].lower() for word in compact.split())
+    replacements = {
+        "Chính Phủ": "Chính phủ",
+        "Quốc Hội": "Quốc hội",
+        "Ủy Ban Thường Vụ Quốc Hội": "Ủy ban Thường vụ Quốc hội",
+        "Thủ Tướng Chính Phủ": "Thủ tướng Chính phủ",
+        "Bộ Tài Chính": "Bộ Tài chính",
+        "Bộ Khoa Học Và Công Nghệ": "Bộ Khoa học và Công nghệ",
+        "Ngân Hàng Nhà Nước": "Ngân hàng Nhà nước",
+        "Tòa Án Nhân Dân Tối Cao": "Tòa án nhân dân tối cao",
+        "Viện Kiểm Sát Nhân Dân Tối Cao": "Viện kiểm sát nhân dân tối cao",
+        "Ủy Ban Nhân Dân": "Ủy ban nhân dân",
+        "Hội Đồng Nhân Dân": "Hội đồng nhân dân",
+        " Và ": " và ",
+        " Của ": " của ",
+        " Trực Thuộc ": " trực thuộc ",
+    }
+    for old, new in replacements.items():
+        compact = compact.replace(old, new)
+    return compact
 
 
 def detect_title(lines: list[str], document_type: str) -> str:
@@ -626,9 +657,14 @@ def extract_definitions(articles: list[Article]) -> list[str]:
 def detect_scope(articles: list[Article]) -> str:
     for article in articles[:5]:
         text = article.raw_content.lower()
-        if "phạm vi điều chỉnh" in text:
-            return article.raw_content
-    return ""
+        title = article.title.lower()
+        first_line = article.raw_content.splitlines()[0].lower() if article.raw_content else ""
+        if "phạm vi điều chỉnh" in title or "phạm vi điều chỉnh" in first_line or "phạm vi điều chỉnh" in text:
+            return article_body_text(article)
+    if articles:
+        first_article_body = article_body_text(articles[0])
+        return first_article_body or articles[0].title or articles[0].raw_content
+    return "Không phát hiện điều khoản chính để xác định phạm vi điều chỉnh."
 
 
 def detect_applicable_subjects(articles: list[Article]) -> str:
@@ -639,7 +675,14 @@ def detect_applicable_subjects(articles: list[Article]) -> str:
         if "đối tượng áp dụng" in title or "đối tượng áp dụng" in first_line:
             subjects = extract_subject_items(article)
             return "\n".join(f"- {subject}" for subject in subjects)
-    return ""
+    inferred = infer_applicable_subjects(articles)
+    return "\n".join(f"- {subject}" for subject in inferred)
+
+
+def article_body_text(article: Article) -> str:
+    lines = article.raw_content.splitlines()
+    body = "\n".join(lines[1:]).strip()
+    return body or article.title.strip()
 
 
 def extract_subject_items(article: Article) -> list[str]:
@@ -655,6 +698,27 @@ def extract_subject_items(article: Article) -> list[str]:
             continue
         items.append(compact)
     return unique_texts(items)
+
+
+def infer_applicable_subjects(articles: list[Article]) -> list[str]:
+    candidate_texts = [article_body_text(article) for article in articles[:5]]
+    for text in candidate_texts:
+        lowered = text.lower()
+        if "cơ quan, tổ chức, cá nhân" in lowered:
+            return [extract_sentence_with_subjects(text)]
+        if "tổ chức, cá nhân" in lowered:
+            return [extract_sentence_with_subjects(text)]
+    return ["Cơ quan, tổ chức, cá nhân có liên quan đến nội dung điều chỉnh của văn bản"]
+
+
+def extract_sentence_with_subjects(text: str) -> str:
+    compact = re.sub(r"\s+", " ", text).strip(" ;.")
+    sentences = re.split(r"(?<=[.!?])\s+", compact)
+    for sentence in sentences:
+        lowered = sentence.lower()
+        if "cơ quan, tổ chức, cá nhân" in lowered or "tổ chức, cá nhân" in lowered:
+            return sentence.strip(" ;.")
+    return compact
 
 
 def normalize_subject_text(line: str) -> str:

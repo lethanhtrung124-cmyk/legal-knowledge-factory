@@ -727,6 +727,8 @@ def validate_pack(parsed: ParsedDocument, article_knowledge: list[ArticleKnowled
     faq_count = sum(len(item.faqs) for item in article_knowledge) + len(group_knowledge_by_topic(article_knowledge))
     keyword_count = sum(len(item.all_keywords) for item in article_knowledge)
 
+    if not parsed.document_type:
+        errors.append("Thiếu loại văn bản.")
     if not parsed.document_number:
         errors.append("Thiếu số/ký hiệu văn bản.")
     if not parsed.issued_date:
@@ -739,6 +741,10 @@ def validate_pack(parsed: ParsedDocument, article_knowledge: list[ArticleKnowled
         errors.append("Cơ quan ban hành không hợp lệ: đang là chức danh người ký, không phải tên cơ quan.")
     if not parsed.title:
         errors.append("Thiếu tên văn bản.")
+    if not parsed.scope:
+        errors.append("Thiếu phạm vi điều chỉnh.")
+    if not parsed.applicable_subjects:
+        errors.append("Thiếu đối tượng áp dụng.")
     if len(parsed.articles) != len(article_knowledge):
         errors.append("Số articles khác số điều chính.")
     duplicate_numbers = find_duplicates([article.number for article in parsed.articles])
@@ -768,7 +774,15 @@ def validate_pack(parsed: ParsedDocument, article_knowledge: list[ArticleKnowled
 
 
 def metadata_complete(parsed: ParsedDocument) -> bool:
-    return bool(parsed.document_number and parsed.issued_date and parsed.issuing_authority and parsed.title)
+    return bool(
+        parsed.document_type
+        and parsed.document_number
+        and parsed.issued_date
+        and parsed.issuing_authority
+        and parsed.title
+        and parsed.scope
+        and parsed.applicable_subjects
+    )
 
 
 def appendix_article_leak(parsed: ParsedDocument) -> bool:

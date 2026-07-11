@@ -133,7 +133,7 @@ def main() -> None:
         "document_type": "document_type: \"Nghị định\"" in metadata,
         "document_number": "document_number: \"12/2026/NĐ-CP\"" in metadata,
         "issued_date": "issued_date: \"09/07/2026\"" in metadata,
-        "issuing_authority": "issuing_authority: \"CHÍNH PHỦ\"" in metadata,
+        "issuing_authority": "issuing_authority: \"Chính phủ\"" in metadata,
         "article_count": "article_count: 92" in metadata,
         "chapter_count": "chapter_count: 1" in metadata,
         "faq_business": "FAQ theo tình huống nghiệp vụ" in faq,
