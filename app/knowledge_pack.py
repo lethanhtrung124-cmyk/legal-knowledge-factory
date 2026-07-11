@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .config import OUTPUT_DIR
-from .document_processor import Appendix, Article, ParsedDocument
+from .document_processor import Appendix, Article, ParsedDocument, is_signer_title
 
 logger = logging.getLogger(__name__)
 
@@ -735,6 +735,8 @@ def validate_pack(parsed: ParsedDocument, article_knowledge: list[ArticleKnowled
         warnings.append("Chưa phát hiện ngày hoặc thời điểm hiệu lực.")
     if not parsed.issuing_authority:
         errors.append("Thiếu cơ quan ban hành.")
+    elif is_signer_title(parsed.issuing_authority):
+        errors.append("Cơ quan ban hành không hợp lệ: đang là chức danh người ký, không phải tên cơ quan.")
     if not parsed.title:
         errors.append("Thiếu tên văn bản.")
     if len(parsed.articles) != len(article_knowledge):

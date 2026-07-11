@@ -98,6 +98,10 @@ SIGNER_TITLE_RE = re.compile(
     r"^(TM\.(?:\s|$)|KT\.(?:\s|$)|TL\.(?:\s|$)|TUQ\.(?:\s|$)|CHỦ\s+TỊCH|BỘ\s+TRƯỞNG|THỦ\s+TƯỚNG|PHÓ\s+THỦ\s+TƯỚNG|CHÁNH\s+ÁN|VIỆN\s+TRƯỞNG)",
     re.IGNORECASE,
 )
+SIGNER_ONLY_TITLE_RE = re.compile(
+    r"^(BỘ\s+TRƯỞNG|THỦ\s+TƯỚNG|PHÓ\s+THỦ\s+TƯỚNG|CHỦ\s+TỊCH|PHÓ\s+CHỦ\s+TỊCH|CHÁNH\s+ÁN|VIỆN\s+TRƯỞNG|THỨ\s+TRƯỞNG)\b",
+    re.IGNORECASE,
+)
 
 
 def parse_document(path: Path) -> ParsedDocument:
@@ -313,6 +317,8 @@ def detect_issuing_authority(lines: list[str], document_type: str, closing_lines
         upper = compact.upper()
         if not compact or "SỐ" == upper[:2] or DATE_RE.search(compact) or DATE_SLASH_RE.search(compact):
             continue
+        if is_signer_title(compact):
+            continue
         if upper_type == "NGHỊ ĐỊNH" and "CHÍNH PHỦ" in upper:
             return collect_authority_heading(lines, index)
         if upper_type == "THÔNG TƯ" and ("BỘ " in upper or "NGÂN HÀNG NHÀ NƯỚC" in upper):
@@ -331,11 +337,12 @@ def detect_issuing_authority_from_signature(lines: list[str]) -> str:
         compact = line.strip()
         upper = compact.upper()
         if upper.startswith("TM."):
-            return compact[3:].strip()
+            authority = compact[3:].strip()
+            return "" if is_signer_title(authority) else authority
         if upper.startswith(("KT.", "TL.", "TUQ.")):
             continue
         if upper in {"CHÍNH PHỦ", "QUỐC HỘI"} or upper.startswith(("BỘ ", "ỦY BAN NHÂN DÂN", "HỘI ĐỒNG NHÂN DÂN")):
-            return compact
+            return "" if is_signer_title(compact) else compact
     return ""
 
 
@@ -354,6 +361,8 @@ def is_authority_heading_continuation(line: str) -> bool:
         return False
     if DATE_RE.search(line) or DATE_SLASH_RE.search(line):
         return False
+    if is_signer_title(line):
+        return False
     if re.match(r"^(Số|CỘNG\s+HÒA|Độc\s+lập|Hà\s+Nội|TP\.|Luật\s+số|Nghị\s+định\s+số|Thông\s+tư\s+số|Quyết\s+định\s+số)\b", line, flags=re.IGNORECASE):
         return False
     if DOCUMENT_KIND_HEADING_RE.match(line) or TYPE_NUMBER_RE.match(line) or DOCUMENT_NUMBER_RE.search(line):
@@ -363,6 +372,19 @@ def is_authority_heading_continuation(line: str) -> bool:
         return False
     uppercase_ratio = sum(1 for char in letters if char.isupper()) / len(letters)
     return uppercase_ratio >= 0.75
+
+
+def is_signer_title(value: str) -> bool:
+    compact = re.sub(r"\s+", " ", value.strip())
+    if not compact:
+        return False
+    if re.match(r"^(KT\.|TL\.|TUQ\.)\s+", compact, flags=re.IGNORECASE):
+        return True
+    without_tm = re.sub(r"^TM\.\s+", "", compact, flags=re.IGNORECASE)
+    upper = without_tm.upper()
+    if upper.startswith(("BỘ TRƯỞNG BỘ ", "THỦ TRƯỞNG CƠ QUAN ")):
+        return False
+    return bool(SIGNER_ONLY_TITLE_RE.match(without_tm))
 
 
 def detect_title(lines: list[str], document_type: str) -> str:
@@ -612,9 +634,58 @@ def detect_scope(articles: list[Article]) -> str:
 def detect_applicable_subjects(articles: list[Article]) -> str:
     for article in articles[:8]:
         text = article.raw_content.lower()
-        if "đối tượng áp dụng" in text:
-            return article.raw_content
+        title = article.title.lower()
+        first_line = article.raw_content.splitlines()[0].lower() if article.raw_content else ""
+        if "đối tượng áp dụng" in title or "đối tượng áp dụng" in first_line:
+            subjects = extract_subject_items(article)
+            return "\n".join(f"- {subject}" for subject in subjects)
     return ""
+
+
+def extract_subject_items(article: Article) -> list[str]:
+    body_lines = article.raw_content.splitlines()[1:]
+    items: list[str] = []
+    for line in body_lines:
+        compact = normalize_subject_text(line)
+        if not compact:
+            continue
+        if looks_like_subject_intro(compact):
+            intro_items = split_subject_sentence(compact)
+            items.extend(intro_items)
+            continue
+        items.append(compact)
+    return unique_texts(items)
+
+
+def normalize_subject_text(line: str) -> str:
+    compact = re.sub(r"\s+", " ", line).strip(" ;.")
+    compact = re.sub(r"^\d+\.\s*", "", compact)
+    compact = re.sub(r"^[a-zđ]\)\s*", "", compact, flags=re.IGNORECASE)
+    return compact.strip(" ;.")
+
+
+def looks_like_subject_intro(text: str) -> bool:
+    lowered = text.lower()
+    return lowered.startswith(("văn bản này áp dụng đối với", "nghị định này áp dụng đối với", "thông tư này áp dụng đối với", "luật này áp dụng đối với"))
+
+
+def split_subject_sentence(text: str) -> list[str]:
+    cleaned = re.sub(
+        r"^(văn bản này|nghị định này|thông tư này|luật này)\s+áp dụng\s+đối\s+với\s+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    parts = [part.strip(" ;.") for part in re.split(r";|\n", cleaned) if part.strip(" ;.")]
+    return parts or [cleaned.strip(" ;.")]
+
+
+def unique_texts(values: list[str]) -> list[str]:
+    output: list[str] = []
+    for value in values:
+        if value and value not in output:
+            output.append(value)
+    return output
 
 
 def detect_effective_date(articles: list[Article], issued_date: str = "") -> str:

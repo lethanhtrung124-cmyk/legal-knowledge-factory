@@ -1,6 +1,8 @@
 from app.document_processor import (
+    Article,
     detect_document_number,
     detect_effective_date,
+    detect_applicable_subjects,
     detect_issuing_authority,
     detect_title,
     detect_document_type,
@@ -11,6 +13,7 @@ from app.document_processor import (
     split_main_appendix_closing,
     split_preamble_and_basis,
 )
+from app.knowledge_pack import build_article_knowledge, validate_pack
 
 
 def test_metadata_parser_prefers_number_line_before_legal_basis():
@@ -231,3 +234,66 @@ def test_effective_date_uses_only_effective_article_not_legal_basis_dates():
     )
 
     assert detect_effective_date(articles) == "15/08/2026"
+
+
+def test_issuing_authority_does_not_use_signer_title_for_circular():
+    lines = [
+        "BỘ KHOA HỌC VÀ CÔNG NGHỆ",
+        "Số: 01/2026/TT-BKHCN",
+        "THÔNG TƯ",
+        "Quy định về hồ sơ điện tử",
+        "Căn cứ Luật Giao dịch điện tử;",
+    ]
+    closing_lines = ["Nơi nhận:", "- Như trên;", "BỘ TRƯỞNG", "Nguyễn Văn A"]
+
+    assert detect_issuing_authority(lines, "Thông tư", closing_lines) == "BỘ KHOA HỌC VÀ CÔNG NGHỆ"
+
+
+def test_applicable_subjects_are_normalized_list_not_raw_article():
+    article = Article(
+        number="2",
+        title="Đối tượng áp dụng",
+        raw_content=(
+            "Điều 2. Đối tượng áp dụng\n"
+            "Thông tư này áp dụng đối với cơ quan nhà nước; tổ chức cung cấp dịch vụ; cá nhân có liên quan."
+        ),
+    )
+
+    result = detect_applicable_subjects([article])
+
+    assert result == "- cơ quan nhà nước\n- tổ chức cung cấp dịch vụ\n- cá nhân có liên quan"
+    assert "Điều 2" not in result
+
+
+def test_validation_fails_when_issuing_authority_is_signer_title():
+    from app.document_processor import ParsedDocument
+
+    article = Article(number="1", title="Phạm vi điều chỉnh", raw_content="Điều 1. Phạm vi điều chỉnh\nNội dung.")
+    parsed = ParsedDocument(
+        file_name="test.docx",
+        document_type="Thông tư",
+        document_number="01/2026/TT-BKHCN",
+        issued_date="01/01/2026",
+        effective_date="",
+        issuing_authority="BỘ TRƯỞNG",
+        title="Quy định thử nghiệm",
+        raw_text="",
+        preamble="",
+        legal_basis=[],
+        scope="",
+        applicable_subjects="",
+        main_text="",
+        appendix_text="",
+        closing_text="",
+        chapters=[],
+        sections=[],
+        subsections=[],
+        articles=[article],
+        appendices=[],
+        definitions=[],
+    )
+
+    validation = validate_pack(parsed, build_article_knowledge(parsed))
+
+    assert validation.status == "FAIL"
+    assert any("chức danh người ký" in error for error in validation.errors)
