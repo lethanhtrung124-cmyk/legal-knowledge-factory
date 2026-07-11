@@ -13,7 +13,7 @@ from app.document_processor import (
     split_main_appendix_closing,
     split_preamble_and_basis,
 )
-from app.knowledge_pack import build_article_knowledge, validate_pack
+from app.knowledge_pack import article_contains_appendix_marker, build_article_knowledge, validate_pack
 
 
 def test_metadata_parser_prefers_number_line_before_legal_basis():
@@ -54,6 +54,19 @@ def test_title_stops_before_legal_basis_and_articles():
     ]
 
     assert detect_title(lines, "Thông tư") == "Quy định về hồ sơ điện tử"
+
+
+def test_decision_title_stops_before_signer_title():
+    lines = [
+        "BỘ KHOA HỌC VÀ CÔNG NGHỆ",
+        "Số: 292/QĐ-BKHCN",
+        "QUYẾT ĐỊNH",
+        "BAN HÀNH KHUNG KIẾN TRÚC CHÍNH PHỦ SỐ VIỆT NAM, PHIÊN BẢN 4.0",
+        "BỘ TRƯỞNG BỘ KHOA HỌC VÀ CÔNG NGHỆ",
+        "Căn cứ Nghị định số 55/2025/NĐ-CP;",
+    ]
+
+    assert detect_title(lines, "Quyết định") == "Ban hành khung kiến trúc chính phủ số việt nam, phiên bản 4.0"
 
 
 def test_article_parser_stops_before_appendix():
@@ -166,6 +179,30 @@ def test_appendix_after_signature_is_kept_outside_closing_text():
     assert "Mẫu số 01" not in closing_lines
 
 
+def test_decision_article_with_attached_phrase_is_not_appendix_start():
+    lines = [
+        "QUYẾT ĐỊNH:",
+        "Điều 1. Ban hành kèm theo Quyết định này Khung kiến trúc Chính phủ số Việt Nam, phiên bản 4.0.",
+        "Điều 2. Quyết định này có hiệu lực thi hành kể từ ngày ký.",
+        "Điều 3. Chánh Văn phòng chịu trách nhiệm thi hành Quyết định này.",
+        "Nơi nhận:",
+        "- Như Điều 3;",
+        "KT. BỘ TRƯỞNG",
+        "THỨ TRƯỞNG",
+        "Nguyễn Văn A",
+        "KHUNG KIẾN TRÚC CHÍNH PHỦ SỐ VIỆT NAM",
+        "(Ban hành kèm theo Quyết định số 292/QĐ-BKHCN ngày 25/03/2025)",
+        "CHƯƠNG 1. KHÁI QUÁT CHUNG",
+    ]
+
+    main_lines, appendix_lines, closing_lines = split_main_appendix_closing(lines)
+    _, _, _, articles = parse_structure(main_lines)
+
+    assert [article.number for article in articles] == ["1", "2", "3"]
+    assert appendix_lines[0] == "KHUNG KIẾN TRÚC CHÍNH PHỦ SỐ VIỆT NAM"
+    assert closing_lines[0] == "Nơi nhận:"
+
+
 def test_recipient_marker_inside_appendix_is_not_document_closing():
     lines = [
         "Điều 1. Nội dung chính",
@@ -193,6 +230,40 @@ def test_detect_effective_date_from_signing_date_phrase():
     )
 
     assert detect_effective_date(articles, "11/07/2026") == "Kể từ ngày ký ban hành (11/07/2026)"
+
+
+def test_decision_effective_date_from_article_body_without_effective_title():
+    _, _, _, articles = parse_structure(
+        [
+            "Điều 1. Ban hành văn bản kèm theo",
+            "Nội dung ban hành.",
+            "Điều 2. Hiệu lực",
+            "Quyết định này có hiệu lực thi hành kể từ ngày ký.",
+        ]
+    )
+
+    assert detect_effective_date(articles, "25/03/2025") == "Kể từ ngày ký ban hành (25/03/2025)"
+
+
+def test_decision_effective_date_does_not_use_replaced_document_dates():
+    _, _, _, articles = parse_structure(
+        [
+            "Điều 2. Hiệu lực",
+            "Quyết định này có hiệu lực thi hành kể từ ngày ký và thay thế Quyết định số 2568/QĐ-BTTTT ngày 29 tháng 12 năm 2023.",
+        ]
+    )
+
+    assert detect_effective_date(articles, "25/03/2025") == "Kể từ ngày ký ban hành (25/03/2025)"
+
+
+def test_decision_article_attached_phrase_is_not_appendix_leak():
+    article = Article(
+        number="1",
+        title="Ban hành văn bản kèm theo",
+        raw_content="Điều 1. Ban hành kèm theo Quyết định này Khung kiến trúc Chính phủ số Việt Nam, phiên bản 4.0.",
+    )
+
+    assert article_contains_appendix_marker(article) is False
 
 
 def test_issuing_authority_prefers_signature_authority_without_normalizing():

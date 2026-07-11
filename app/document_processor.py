@@ -387,6 +387,12 @@ def is_signer_title(value: str) -> bool:
     return bool(SIGNER_ONLY_TITLE_RE.match(without_tm))
 
 
+def is_signer_heading_line(value: str) -> bool:
+    compact = re.sub(r"\s+", " ", value.strip())
+    without_tm = re.sub(r"^TM\.\s+", "", compact, flags=re.IGNORECASE)
+    return bool(SIGNER_ONLY_TITLE_RE.match(without_tm))
+
+
 def normalize_authority_name(value: str) -> str:
     compact = re.sub(r"\s+", " ", value.strip())
     if not compact:
@@ -446,6 +452,8 @@ def detect_title(lines: list[str], document_type: str) -> str:
         for next_line in lines[type_index + 1 : min(type_index + 10, len(lines))]:
             lowered = next_line.lower()
             if lowered.startswith(stop_markers):
+                break
+            if is_signer_heading_line(next_line):
                 break
             if TYPE_NUMBER_RE.match(next_line) or DOCUMENT_KIND_HEADING_RE.match(next_line.strip()):
                 continue
@@ -543,7 +551,8 @@ def split_main_appendix_closing(lines: list[str]) -> tuple[list[str], list[str],
 
     if appendix_start is not None:
         if closing_start is not None and closing_start < appendix_start:
-            return lines[main_start:closing_start], lines[appendix_start:], lines[closing_start:appendix_start]
+            adjusted_appendix_start = adjust_appendix_start(lines, appendix_start, closing_start)
+            return lines[main_start:closing_start], lines[adjusted_appendix_start:], lines[closing_start:adjusted_appendix_start]
         main_lines = lines[main_start:appendix_start]
         appendix_lines = lines[appendix_start:]
         return main_lines, appendix_lines, []
@@ -554,7 +563,26 @@ def split_main_appendix_closing(lines: list[str]) -> tuple[list[str], list[str],
 
 
 def is_appendix_start(line: str) -> bool:
+    if ARTICLE_RE.match(line):
+        return False
     return bool(APPENDIX_RE.match(line) or FORM_RE.match(line) or ATTACHED_RE.search(line))
+
+
+def adjust_appendix_start(lines: list[str], appendix_start: int, closing_start: int) -> int:
+    if APPENDIX_RE.match(lines[appendix_start].strip()) or FORM_RE.match(lines[appendix_start].strip()):
+        return appendix_start
+    previous_index = appendix_start - 1
+    if previous_index <= closing_start:
+        return appendix_start
+    previous_line = lines[previous_index].strip()
+    if previous_line and not is_closing_start(previous_line) and not previous_line.startswith("-") and is_upper_heading(previous_line):
+        return previous_index
+    return appendix_start
+
+
+def is_upper_heading(line: str) -> bool:
+    letters = [char for char in line if char.isalpha()]
+    return bool(letters) and sum(1 for char in letters if char.isupper()) / len(letters) >= 0.75
 
 
 def is_closing_start(line: str) -> bool:
@@ -757,6 +785,9 @@ def detect_effective_date(articles: list[Article], issued_date: str = "") -> str
     if not article:
         return ""
     text = article.raw_content
+    lowered = text.lower()
+    if "kể từ ngày ký" in lowered or "từ ngày ký" in lowered:
+        return f"Kể từ ngày ký ban hành ({issued_date})" if issued_date else "Kể từ ngày ký ban hành"
     slash_match = DATE_SLASH_RE.search(text)
     if slash_match:
         day, month, year = slash_match.groups()
@@ -765,9 +796,6 @@ def detect_effective_date(articles: list[Article], issued_date: str = "") -> str
     if long_date:
         day, month, year = long_date.groups()
         return f"{int(day):02d}/{int(month):02d}/{year}"
-    lowered = text.lower()
-    if "kể từ ngày ký" in lowered or "từ ngày ký" in lowered:
-        return f"Kể từ ngày ký ban hành ({issued_date})" if issued_date else "Kể từ ngày ký ban hành"
     return ""
 
 
@@ -776,6 +804,10 @@ def find_effective_article(articles: list[Article]) -> Article | None:
         title = article.title.lower()
         first_line = article.raw_content.splitlines()[0].lower() if article.raw_content else ""
         if "hiệu lực thi hành" in title or "hiệu lực thi hành" in first_line:
+            return article
+    for article in articles:
+        body = "\n".join(article.raw_content.splitlines()[1:]).lower()
+        if "có hiệu lực thi hành" in body or "hiệu lực thi hành kể từ" in body:
             return article
     return None
 

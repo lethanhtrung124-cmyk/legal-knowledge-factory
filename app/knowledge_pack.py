@@ -812,13 +812,9 @@ def article_contains_structure_heading(article: Article) -> bool:
 
 
 def article_contains_appendix_marker(article: Article) -> bool:
-    return bool(
-        re.search(
-            r"(^|\n)(PHỤ\s+LỤC|Phụ\s+lục|Mẫu\s+số|Biểu\s+mẫu)\b|ban\s+hành\s+kèm\s+theo",
-            article.raw_content,
-            flags=re.IGNORECASE,
-        )
-    )
+    lines = article.raw_content.splitlines()
+    body_after_header = "\n".join(lines[1:])
+    return bool(re.search(r"(^|\n)(PHỤ\s+LỤC|Phụ\s+lục|Mẫu\s+số|Biểu\s+mẫu)\b", body_after_header, flags=re.IGNORECASE))
 
 
 def article_contains_closing_marker(article: Article) -> bool:
