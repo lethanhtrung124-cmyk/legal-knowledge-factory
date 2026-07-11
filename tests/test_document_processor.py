@@ -1,10 +1,14 @@
 from app.document_processor import (
     detect_document_number,
+    detect_effective_date,
     detect_title,
     detect_document_type,
+    extract_closing_metadata,
     parse_appendices,
     parse_structure,
     split_main_and_appendix,
+    split_main_appendix_closing,
+    split_preamble_and_basis,
 )
 
 
@@ -76,3 +80,112 @@ def test_appendix_detector_detects_forms():
     assert len(appendices) == 1
     assert appendices[0].kind == "mau_so"
     assert "Điều 1" in appendices[0].raw_content
+
+
+def test_legal_basis_excludes_proposal_and_enactment_line():
+    lines = [
+        "CHÍNH PHỦ",
+        "Số: 224/2026/NĐ-CP",
+        "NGHỊ ĐỊNH",
+        "Quy định chi tiết một số điều",
+        "Căn cứ Luật Tổ chức Chính phủ;",
+        "Căn cứ Luật Chuyển đổi số;",
+        "Theo đề nghị của Bộ trưởng Bộ Khoa học và Công nghệ;",
+        "Chính phủ ban hành Nghị định quy định chi tiết một số điều.",
+        "Chương I",
+        "Điều 1. Phạm vi điều chỉnh",
+    ]
+
+    _, legal_basis = split_preamble_and_basis(lines)
+
+    assert legal_basis == ["Căn cứ Luật Tổ chức Chính phủ;", "Căn cứ Luật Chuyển đổi số;"]
+
+
+def test_main_parser_stops_before_closing_section():
+    lines = [
+        "Chương I",
+        "Điều 1. Phạm vi điều chỉnh",
+        "1. Nội dung chính.",
+        "Nơi nhận:",
+        "- Văn phòng Chính phủ;",
+        "TM. CHÍNH PHỦ",
+        "THỦ TƯỚNG",
+        "Nguyễn Văn A",
+    ]
+
+    main_lines, appendix_lines, closing_lines = split_main_appendix_closing(lines)
+    _, _, _, articles = parse_structure(main_lines)
+    recipients, signer = extract_closing_metadata(closing_lines)
+
+    assert appendix_lines == []
+    assert [article.number for article in articles] == ["1"]
+    assert "Nơi nhận" not in articles[0].raw_content
+    assert recipients[0] == "Nơi nhận:"
+    assert "THỦ TƯỚNG" in signer
+    assert "Nguyễn Văn A" in signer
+
+
+def test_chairperson_inside_article_is_not_closing_section():
+    _, _, _, articles = parse_structure(
+        [
+            "Điều 50. Thẩm quyền quyết định",
+            "1. Chủ tịch Ủy ban nhân dân cấp tỉnh quyết định dự án theo thẩm quyền.",
+            "2. Bộ trưởng, Thủ trưởng cơ quan ngang bộ tổ chức thực hiện.",
+            "Điều 51. Nội dung tiếp theo",
+            "1. Nội dung chính.",
+        ]
+    )
+
+    assert [article.number for article in articles] == ["50", "51"]
+
+
+def test_appendix_after_signature_is_kept_outside_closing_text():
+    lines = [
+        "Điều 1. Nội dung chính",
+        "1. Quy định chính.",
+        "Nơi nhận:",
+        "- Như trên;",
+        "TM. CHÍNH PHỦ",
+        "KT. THỦ TƯỚNG",
+        "PHÓ THỦ TƯỚNG",
+        "Nguyễn Văn A",
+        "Phụ lục",
+        "Mẫu số 01",
+        "Nội dung biểu mẫu.",
+    ]
+
+    main_lines, appendix_lines, closing_lines = split_main_appendix_closing(lines)
+
+    assert main_lines == ["Điều 1. Nội dung chính", "1. Quy định chính."]
+    assert appendix_lines[0] == "Phụ lục"
+    assert "Nơi nhận:" in closing_lines
+    assert "Mẫu số 01" not in closing_lines
+
+
+def test_recipient_marker_inside_appendix_is_not_document_closing():
+    lines = [
+        "Điều 1. Nội dung chính",
+        "1. Quy định chính.",
+        "Phụ lục",
+        "Mẫu số 01",
+        "Nơi nhận:",
+        "- Như trên;",
+        "ĐẠI DIỆN CƠ QUAN",
+    ]
+
+    main_lines, appendix_lines, closing_lines = split_main_appendix_closing(lines)
+
+    assert main_lines == ["Điều 1. Nội dung chính", "1. Quy định chính."]
+    assert "Nơi nhận:" in appendix_lines
+    assert closing_lines == []
+
+
+def test_detect_effective_date_from_signing_date_phrase():
+    _, _, _, articles = parse_structure(
+        [
+            "Điều 92. Hiệu lực thi hành",
+            "Nghị định này có hiệu lực thi hành kể từ ngày ký ban hành.",
+        ]
+    )
+
+    assert detect_effective_date(articles, "11/07/2026") == "Kể từ ngày ký ban hành (11/07/2026)"

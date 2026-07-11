@@ -226,10 +226,18 @@ document_type: "{parsed.document_type}"
 document_number: "{escape_yaml(parsed.document_number)}"
 issuing_authority: "{escape_yaml(parsed.issuing_authority)}"
 issued_date: "{escape_yaml(parsed.issued_date)}"
+effective_date: "{escape_yaml(parsed.effective_date)}"
 title: "{escape_yaml(parsed.title)}"
 legal_basis:
 {legal_basis or "  []"}
-scope: "{escape_yaml(summarize(parsed.scope, 260))}"
+scope: |
+{yaml_block(parsed.scope)}
+applicable_subjects: |
+{yaml_block(parsed.applicable_subjects)}
+recipients:
+{yaml_list_block(parsed.recipients)}
+signer: |
+{yaml_block(parsed.signer)}
 chapter_count: {len(parsed.chapters)}
 section_count: {len(parsed.sections)}
 subsection_count: {len(parsed.subsections)}
@@ -358,9 +366,11 @@ Quy tắc bắt buộc:
 - Khi trả lời pháp lý phải nêu rõ Điều/Khoản/Điểm nếu có.
 - Không suy luận, không đoán ý, không bổ sung điều kiện hoặc nghĩa vụ nếu nội dung gốc không nêu.
 - Không được suy luận từ từ khóa, tiêu đề hoặc FAQ nếu nội dung gốc không có căn cứ.
-- Thứ tự ưu tiên nguồn: Nội dung gốc > Điều khoản đã tách > Tóm tắt > FAQ > Từ khóa.
+- Thứ tự ưu tiên nguồn bắt buộc: Nội dung gốc trong `07_noi_dung_goc.md` và `articles/dieu_*.md` > điều khoản đã tách > metadata > tóm tắt > FAQ > từ khóa.
 - Nếu FAQ hoặc tóm tắt mâu thuẫn với nội dung gốc thì phải ưu tiên nội dung gốc.
-- Không được coi phụ lục, biểu mẫu, mẫu quyết định là điều khoản chính của văn bản.
+- Không được coi phụ lục, biểu mẫu, bảng, mẫu quyết định, mẫu tờ khai hoặc nội dung trong `appendices/` là điều khoản chính của văn bản.
+- Khi người dùng hỏi về điều khoản chính, chỉ sử dụng các file trong `articles/`; chỉ dùng `appendices/` khi câu hỏi nêu rõ phụ lục, biểu mẫu hoặc mẫu tương ứng.
+- Không được trích phụ lục để tạo nghĩa vụ pháp lý chính nếu điều khoản chính không nêu nghĩa vụ đó.
 - Không được tự xác định văn bản hết hiệu lực, bị thay thế, bị sửa đổi nếu metadata hoặc nội dung gốc không nêu.
 - Nếu không tìm thấy căn cứ thì trả lời đúng câu: “Chưa có căn cứ trực tiếp trong văn bản được nạp.”
 - Không được tự thêm quy định từ văn bản khác nếu văn bản đó chưa được nạp.
@@ -721,12 +731,31 @@ def validate_pack(parsed: ParsedDocument, article_knowledge: list[ArticleKnowled
         errors.append("Thiếu số/ký hiệu văn bản.")
     if not parsed.issued_date:
         errors.append("Thiếu ngày ban hành.")
+    if not parsed.effective_date:
+        warnings.append("Chưa phát hiện ngày hoặc thời điểm hiệu lực.")
     if not parsed.issuing_authority:
         errors.append("Thiếu cơ quan ban hành.")
+    if not parsed.title:
+        errors.append("Thiếu tên văn bản.")
     if len(parsed.articles) != len(article_knowledge):
         errors.append("Số articles khác số điều chính.")
+    duplicate_numbers = find_duplicates([article.number for article in parsed.articles])
+    if duplicate_numbers:
+        errors.append(f"Điều bị trùng số: {', '.join(duplicate_numbers)}.")
+    missing_numbers = missing_article_numbers(parsed.articles)
+    if missing_numbers:
+        errors.append(f"Thiếu điều trong chuỗi số: {', '.join(missing_numbers)}.")
     if appendix_article_leak(parsed):
         errors.append("Phát hiện điều phụ lục có nguy cơ bị nhầm vào articles/.")
+    for article in parsed.articles:
+        if article_has_orphan_point(article):
+            errors.append(f"Điều {article.number} có Điểm không thuộc Khoản.")
+        if article_contains_structure_heading(article):
+            errors.append(f"Điều {article.number} chứa tiêu đề Chương/Mục bên trong nội dung điều.")
+        if article_contains_appendix_marker(article):
+            errors.append(f"Điều {article.number} có dấu hiệu lẫn nội dung phụ lục/biểu mẫu.")
+        if article_contains_closing_marker(article):
+            errors.append(f"Điều {article.number} có dấu hiệu lẫn phần nơi nhận/người ký.")
     if has_generic_faqs(article_knowledge):
         warnings.append("FAQ còn có câu hỏi chung, cần rà lại nếu dùng cho nghiệp vụ chuyên sâu.")
     if has_common_keywords(article_knowledge):
@@ -737,19 +766,53 @@ def validate_pack(parsed: ParsedDocument, article_knowledge: list[ArticleKnowled
 
 
 def metadata_complete(parsed: ParsedDocument) -> bool:
-    return bool(parsed.document_number and parsed.issued_date and parsed.issuing_authority)
+    return bool(parsed.document_number and parsed.issued_date and parsed.issuing_authority and parsed.title)
 
 
 def appendix_article_leak(parsed: ParsedDocument) -> bool:
-    appendix_numbers = set(
-        re.findall(
-            r"Điều\s+(\d+[a-zA-Z]?)\.",
-            "\n".join(appendix.raw_content for appendix in parsed.appendices),
+    return any(article_contains_appendix_marker(article) for article in parsed.articles)
+
+
+def missing_article_numbers(articles: list[Article]) -> list[str]:
+    numbers = [article.number for article in articles]
+    expected_numbers = expected_article_numbers(numbers)
+    actual_numbers = set(numbers)
+    return [number for number in expected_numbers if number not in actual_numbers]
+
+
+def article_has_orphan_point(article: Article) -> bool:
+    has_clause = False
+    for line in article.raw_content.splitlines()[1:]:
+        if re.match(r"^\d+\.\s+", line):
+            has_clause = True
+        if re.match(r"^[a-zđ]\)\s+", line, flags=re.IGNORECASE) and not has_clause:
+            return True
+    return False
+
+
+def article_contains_structure_heading(article: Article) -> bool:
+    lines = article.raw_content.splitlines()[1:]
+    return any(re.match(r"^(Chương|Mục|Tiểu\s+mục)\s+", line, flags=re.IGNORECASE) for line in lines)
+
+
+def article_contains_appendix_marker(article: Article) -> bool:
+    return bool(
+        re.search(
+            r"(^|\n)(PHỤ\s+LỤC|Phụ\s+lục|Mẫu\s+số|Biểu\s+mẫu)\b|ban\s+hành\s+kèm\s+theo",
+            article.raw_content,
             flags=re.IGNORECASE,
         )
     )
-    article_numbers = {article.number for article in parsed.articles}
-    return bool(article_numbers.intersection(appendix_numbers - set(str(i) for i in range(1, len(parsed.articles) + 1))))
+
+
+def article_contains_closing_marker(article: Article) -> bool:
+    return bool(
+        re.search(
+            r"(^|\n)(Nơi\s+nhận\b|TM\.(?:\s|$)|KT\.(?:\s|$)|TL\.(?:\s|$)|TUQ\.(?:\s|$))",
+            article.raw_content,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def has_generic_faqs(article_knowledge: list[ArticleKnowledge]) -> bool:
@@ -841,6 +904,18 @@ def escape_yaml(value: str) -> str:
 
 def yaml_list(values: list[str]) -> str:
     return ", ".join(f'"{escape_yaml(value)}"' for value in values)
+
+
+def yaml_block(value: str) -> str:
+    if not value.strip():
+        return "  "
+    return "\n".join(f"  {line}" for line in value.splitlines())
+
+
+def yaml_list_block(values: list[str]) -> str:
+    if not values:
+        return "  []"
+    return "\n".join(f"  - \"{escape_yaml(value)}\"" for value in values)
 
 
 def unique(values: list[str]) -> list[str]:

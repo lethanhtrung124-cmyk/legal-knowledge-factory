@@ -40,20 +40,25 @@ class ParsedDocument:
     document_type: str
     document_number: str
     issued_date: str
+    effective_date: str
     issuing_authority: str
     title: str
     raw_text: str
     preamble: str
     legal_basis: list[str]
     scope: str
+    applicable_subjects: str
     main_text: str
     appendix_text: str
+    closing_text: str
     chapters: list[str]
     sections: list[str]
     subsections: list[str]
     articles: list[Article]
     appendices: list[Appendix]
     definitions: list[str]
+    recipients: list[str] = field(default_factory=list)
+    signer: str = ""
     warnings: list[str] = field(default_factory=list)
 
 
@@ -82,8 +87,17 @@ DATE_RE = re.compile(
     re.IGNORECASE,
 )
 DATE_SLASH_RE = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b")
-LEGAL_BASIS_RE = re.compile(r"^(Căn cứ|Theo đề nghị|Xét đề nghị)\b", re.IGNORECASE)
+LEGAL_BASIS_RE = re.compile(r"^Căn cứ\b", re.IGNORECASE)
+PROPOSAL_RE = re.compile(r"^(Theo đề nghị|Xét đề nghị)\b", re.IGNORECASE)
 MAIN_START_RE = re.compile(r"^(Chương\s+|Điều\s+1\.)", re.IGNORECASE)
+CLOSING_START_RE = re.compile(
+    r"^(Nơi\s+nhận\b|TM\.(?:\s|$)|KT\.(?:\s|$)|TL\.(?:\s|$)|TUQ\.(?:\s|$))",
+    re.IGNORECASE,
+)
+SIGNER_TITLE_RE = re.compile(
+    r"^(TM\.(?:\s|$)|KT\.(?:\s|$)|TL\.(?:\s|$)|TUQ\.(?:\s|$)|CHỦ\s+TỊCH|BỘ\s+TRƯỞNG|THỦ\s+TƯỚNG|PHÓ\s+THỦ\s+TƯỚNG|CHÁNH\s+ÁN|VIỆN\s+TRƯỞNG)",
+    re.IGNORECASE,
+)
 
 
 def parse_document(path: Path) -> ParsedDocument:
@@ -108,11 +122,14 @@ def parse_document(path: Path) -> ParsedDocument:
     issuing_authority = normalize_authority(detect_issuing_authority(lines, document_type))
     title = detect_title(lines, document_type)
     preamble_lines, legal_basis = split_preamble_and_basis(lines)
-    main_lines, appendix_lines = split_main_and_appendix(lines)
+    main_lines, appendix_lines, closing_lines = split_main_appendix_closing(lines)
     chapters, sections, subsections, articles = parse_structure(main_lines)
     appendices = parse_appendices(appendix_lines)
     definitions = extract_definitions(articles)
     scope = detect_scope(articles)
+    applicable_subjects = detect_applicable_subjects(articles)
+    effective_date = detect_effective_date(articles, issued_date)
+    recipients, signer = extract_closing_metadata(closing_lines)
     warnings = collect_parse_warnings(
         document_number=document_number,
         issued_date=issued_date,
@@ -135,20 +152,25 @@ def parse_document(path: Path) -> ParsedDocument:
         document_type=document_type,
         document_number=document_number,
         issued_date=issued_date,
+        effective_date=effective_date,
         issuing_authority=issuing_authority,
         title=title,
         raw_text=normalized,
         preamble="\n".join(preamble_lines),
         legal_basis=legal_basis,
         scope=scope,
+        applicable_subjects=applicable_subjects,
         main_text="\n".join(main_lines),
         appendix_text="\n".join(appendix_lines),
+        closing_text="\n".join(closing_lines),
         chapters=chapters,
         sections=sections,
         subsections=subsections,
         articles=articles,
         appendices=appendices,
         definitions=definitions,
+        recipients=recipients,
+        signer=signer,
         warnings=warnings,
     )
 
@@ -402,7 +424,11 @@ def split_preamble_and_basis(lines: list[str]) -> tuple[list[str], list[str]]:
             break
         if LEGAL_BASIS_RE.match(line):
             in_basis = True
-        if in_basis:
+            basis.append(line)
+            continue
+        if in_basis and (PROPOSAL_RE.match(line) or re.search(r"\bban\s+hành\b", line, flags=re.IGNORECASE)):
+            continue
+        if in_basis and line.endswith(";"):
             basis.append(line)
         else:
             preamble.append(line)
@@ -410,20 +436,46 @@ def split_preamble_and_basis(lines: list[str]) -> tuple[list[str], list[str]]:
 
 
 def split_main_and_appendix(lines: list[str]) -> tuple[list[str], list[str]]:
+    main_lines, appendix_lines, _ = split_main_appendix_closing(lines)
+    return main_lines, appendix_lines
+
+
+def split_main_appendix_closing(lines: list[str]) -> tuple[list[str], list[str], list[str]]:
     main_start = 0
     for index, line in enumerate(lines):
         if MAIN_START_RE.match(line):
             main_start = index
             break
 
+    appendix_start: int | None = None
+    closing_start: int | None = None
     for index, line in enumerate(lines[main_start:], start=main_start):
         if is_appendix_start(line):
-            return lines[main_start:index], lines[index:]
-    return lines[main_start:], []
+            appendix_start = index
+            break
+        if is_closing_start(line):
+            if closing_start is None:
+                closing_start = index
+            continue
+
+    if appendix_start is not None:
+        if closing_start is not None and closing_start < appendix_start:
+            return lines[main_start:closing_start], lines[appendix_start:], lines[closing_start:appendix_start]
+        main_lines = lines[main_start:appendix_start]
+        appendix_lines = lines[appendix_start:]
+        return main_lines, appendix_lines, []
+
+    if closing_start is not None:
+        return lines[main_start:closing_start], [], lines[closing_start:]
+    return lines[main_start:], [], []
 
 
 def is_appendix_start(line: str) -> bool:
     return bool(APPENDIX_RE.match(line) or FORM_RE.match(line) or ATTACHED_RE.search(line))
+
+
+def is_closing_start(line: str) -> bool:
+    return bool(CLOSING_START_RE.match(line.strip()))
 
 
 def parse_structure(lines: list[str]) -> tuple[list[str], list[str], list[str], list[Article]]:
@@ -437,7 +489,7 @@ def parse_structure(lines: list[str]) -> tuple[list[str], list[str], list[str], 
     current_subsection = ""
 
     for line in lines:
-        if is_appendix_start(line):
+        if is_appendix_start(line) or is_closing_start(line):
             break
 
         chapter_match = CHAPTER_RE.match(line)
@@ -522,9 +574,66 @@ def extract_definitions(articles: list[Article]) -> list[str]:
 def detect_scope(articles: list[Article]) -> str:
     for article in articles[:5]:
         text = article.raw_content.lower()
-        if "phạm vi điều chỉnh" in text or "đối tượng áp dụng" in text:
+        if "phạm vi điều chỉnh" in text:
             return article.raw_content
     return ""
+
+
+def detect_applicable_subjects(articles: list[Article]) -> str:
+    for article in articles[:8]:
+        text = article.raw_content.lower()
+        if "đối tượng áp dụng" in text:
+            return article.raw_content
+    return ""
+
+
+def detect_effective_date(articles: list[Article], issued_date: str = "") -> str:
+    for article in articles[-8:]:
+        text = article.raw_content
+        lowered = text.lower()
+        if "hiệu lực" not in lowered and "ngày ký" not in lowered:
+            continue
+        slash_match = DATE_SLASH_RE.search(text)
+        if slash_match:
+            day, month, year = slash_match.groups()
+            return f"{int(day):02d}/{int(month):02d}/{year}"
+        long_date = DATE_RE.search(text)
+        if long_date:
+            day, month, year = long_date.groups()
+            return f"{int(day):02d}/{int(month):02d}/{year}"
+        if "kể từ ngày ký" in lowered or "từ ngày ký" in lowered:
+            return f"Kể từ ngày ký ban hành ({issued_date})" if issued_date else "Kể từ ngày ký ban hành"
+    return ""
+
+
+def extract_closing_metadata(lines: list[str]) -> tuple[list[str], str]:
+    recipients: list[str] = []
+    signer_candidates: list[str] = []
+    in_recipients = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.lower().startswith("nơi nhận"):
+            in_recipients = True
+            recipients.append(stripped)
+            continue
+        if SIGNER_TITLE_RE.match(stripped):
+            in_recipients = False
+            signer_candidates.append(stripped)
+            continue
+        if in_recipients:
+            recipients.append(stripped)
+        elif signer_candidates or looks_like_person_name(stripped):
+            signer_candidates.append(stripped)
+    return recipients, "\n".join(signer_candidates).strip()
+
+
+def looks_like_person_name(value: str) -> bool:
+    if len(value) > 80 or any(char.isdigit() for char in value):
+        return False
+    words = value.split()
+    return 2 <= len(words) <= 5 and sum(word[:1].isupper() for word in words) == len(words)
 
 
 def collect_parse_warnings(
@@ -543,10 +652,4 @@ def collect_parse_warnings(
         warnings.append("Thiếu cơ quan ban hành.")
     if not articles:
         warnings.append("Không phát hiện điều khoản chính.")
-    appendix_text = "\n".join(appendix.raw_content for appendix in appendices)
-    appendix_article_numbers = set(re.findall(r"Điều\s+(\d+[a-zA-Z]?)\.", appendix_text, flags=re.IGNORECASE))
-    article_numbers = {article.number for article in articles}
-    overlap = sorted(article_numbers.intersection(appendix_article_numbers))
-    if overlap:
-        warnings.append(f"Phụ lục có số điều trùng điều chính: {', '.join(overlap)}.")
     return warnings
