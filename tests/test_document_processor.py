@@ -3,6 +3,7 @@ from app.document_processor import (
     detect_document_number,
     detect_effective_date,
     detect_applicable_subjects,
+    detect_scope,
     detect_issuing_authority,
     detect_title,
     detect_document_type,
@@ -407,11 +408,39 @@ def test_combined_scope_and_subjects_article_uses_application_clause_only():
         raw_content=(
             "Điều 1. Phạm vi điều chỉnh và đối tượng áp dụng\n"
             "1. Nghị quyết này quy định việc cắt giảm ngành nghề đầu tư kinh doanh có điều kiện.\n"
-            "2. Nghị quyết này áp dụng đối với nhà đầu tư và cơ quan, tổ chức, cá nhân liên quan."
+            "2. Nghị quyết này áp dụng đối với nhà đầu tư và cơ quan, tổ chức, cá nhân liên quan đến hoạt động đầu tư kinh doanh có điều kiện."
         ),
     )
 
-    assert detect_applicable_subjects([article]) == "- nhà đầu tư và cơ quan, tổ chức, cá nhân liên quan"
+    assert detect_applicable_subjects([article]) == (
+        "- Chủ thể: nhà đầu tư và cơ quan, tổ chức, cá nhân\n"
+        "- Hoạt động liên quan:\n"
+        "  - hoạt động đầu tư kinh doanh có điều kiện"
+    )
+    assert detect_scope([article]) == "Nghị quyết này quy định việc cắt giảm ngành nghề đầu tư kinh doanh có điều kiện"
+
+
+def test_applicable_subjects_preserve_subject_activity_relationship():
+    article = Article(
+        number="1",
+        title="Phạm vi điều chỉnh và đối tượng áp dụng",
+        raw_content=(
+            "Điều 1. Phạm vi điều chỉnh và đối tượng áp dụng\n"
+            "1. Nghị định này quy định về dữ liệu mở.\n"
+            "2. Nghị định này áp dụng đối với cơ quan, tổ chức, cá nhân tham gia trực tiếp hoặc liên quan đến các hoạt động: "
+            "Xây dựng, cập nhật, duy trì và khai thác, sử dụng cơ sở dữ liệu quốc gia; "
+            "kết nối, chia sẻ dữ liệu phục vụ giao dịch điện tử của cơ quan nhà nước; "
+            "xây dựng và triển khai Khung kiến trúc tổng thể quốc gia số."
+        ),
+    )
+
+    assert detect_applicable_subjects([article]) == (
+        "- Chủ thể: cơ quan, tổ chức, cá nhân\n"
+        "- Hoạt động liên quan:\n"
+        "  - Xây dựng, cập nhật, duy trì và khai thác, sử dụng cơ sở dữ liệu quốc gia\n"
+        "  - kết nối, chia sẻ dữ liệu phục vụ giao dịch điện tử của cơ quan nhà nước\n"
+        "  - xây dựng và triển khai Khung kiến trúc tổng thể quốc gia số"
+    )
 
 
 def test_metadata_scope_and_subjects_have_fallbacks():

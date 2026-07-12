@@ -166,6 +166,13 @@ class ValidationResult:
     keyword_count: int
 
 
+@dataclass
+class MergedMarkdownValidationResult:
+    status: str
+    warnings: list[str]
+    errors: list[str]
+
+
 def build_knowledge_pack(parsed: ParsedDocument, output_root: Path | None = None) -> Path:
     output_root = output_root or OUTPUT_DIR / "knowledge_packs"
     safe_number = document_folder_name(parsed)
@@ -204,9 +211,16 @@ def build_knowledge_pack(parsed: ParsedDocument, output_root: Path | None = None
     write_text(indexes_dir / "topic_index.md", render_topic_index(article_knowledge))
     write_json(indexes_dir / "article_index.json", build_article_index(article_knowledge))
     write_json(indexes_dir / "citation_index.json", build_citation_index(article_knowledge))
-    write_text(pack_dir / gpt_knowledge_file_name(parsed), render_gpt_knowledge_markdown(parsed, article_knowledge))
 
     zip_path = shutil.make_archive(str(pack_dir), "zip", root_dir=pack_dir)
+    merged_markdown = render_gpt_knowledge_markdown(parsed, article_knowledge)
+    merged_validation = validate_merged_markdown(parsed, article_knowledge, merged_markdown)
+    if merged_validation.status == "FAIL":
+        logger.error("Merged Markdown validation failed: %s", "; ".join(merged_validation.errors))
+        raise ValueError("Merged Markdown validation FAIL: " + "; ".join(merged_validation.errors))
+    if merged_validation.warnings:
+        logger.warning("Merged Markdown validation warnings: %s", "; ".join(merged_validation.warnings))
+    write_text(output_root / gpt_knowledge_file_name(parsed), merged_markdown)
     logger.info("Knowledge Pack created: %s", zip_path)
     return Path(zip_path)
 
@@ -254,7 +268,7 @@ privacy: "MVP xử lý cục bộ, không gửi dữ liệu ra ngoài."
 
 def render_gpt_knowledge_markdown(parsed: ParsedDocument, article_knowledge: list[ArticleKnowledge]) -> str:
     lines = [
-        f"# GPT Knowledge - {parsed.title}",
+        f"# {parsed.title}",
         "",
         "Tài liệu hợp nhất dùng để nạp vào Custom GPT. Nội dung gốc được đặt trước các phần tóm tắt, từ khóa và FAQ.",
         "",
@@ -291,7 +305,7 @@ def render_gpt_knowledge_markdown(parsed: ParsedDocument, article_knowledge: lis
 
     lines.extend(["", "## Giải thích từ ngữ", ""])
     if parsed.definitions:
-        lines.extend(parsed.definitions)
+        lines.extend(render_merged_definitions(parsed.definitions))
     else:
         lines.append("Không phát hiện điều khoản giải thích từ ngữ riêng trong văn bản.")
 
@@ -304,16 +318,7 @@ def render_gpt_knowledge_markdown(parsed: ParsedDocument, article_knowledge: lis
             "",
         ]
     )
-    for item in article_knowledge:
-        article = item.article
-        lines.extend(
-            [
-                f"### Điều/Mục {article.number}. {article.title or 'Không có tiêu đề'}",
-                "",
-                article.raw_content,
-                "",
-            ]
-        )
+    lines.extend(render_original_article_sections(article_knowledge))
 
     lines.extend(["", "## Phụ lục", ""])
     if parsed.appendices:
@@ -329,23 +334,129 @@ def render_gpt_knowledge_markdown(parsed: ParsedDocument, article_knowledge: lis
     else:
         lines.append("Không phát hiện phụ lục/biểu mẫu.")
 
-    lines.extend(["", "## Bảng tra cứu", "", render_lookup(article_knowledge), ""])
-    lines.extend(["", "## Chủ đề", "", render_topics(article_knowledge), ""])
-    lines.extend(["", "## Từ khóa", "", render_keyword_index(article_knowledge), ""])
+    lines.extend(["", "## Bảng tra cứu", "", embed_markdown_section(render_lookup(article_knowledge)), ""])
+    lines.extend(["", "## Chủ đề", "", embed_markdown_section(render_topics(article_knowledge)), ""])
+    lines.extend(["", "## Từ khóa", "", embed_markdown_section(render_keyword_index(article_knowledge)), ""])
     lines.extend(["", "## Tóm tắt theo điều khoản", ""])
     for item in article_knowledge:
         article = item.article
         lines.extend(
             [
-                f"### Điều/Mục {article.number}. {article.title or 'Không có tiêu đề'}",
+                f"### Tóm tắt {structure_label(article)} {article.number}",
                 "",
                 summarize(article.raw_content),
                 "",
             ]
         )
 
-    lines.extend(["", "## FAQ", "", render_faq(parsed, article_knowledge)])
+    lines.extend(["", "## FAQ", ""])
+    faqs = quality_checked_faqs(article_knowledge)
+    if faqs:
+        for faq in faqs:
+            lines.extend(
+                [
+                    f"### {faq['question']}",
+                    f"- Câu trả lời ngắn: {faq['answer']}",
+                    f"- Căn cứ: {faq['citation']}",
+                    f"- Mức độ chắc chắn: {faq['confidence']}",
+                    f"- Ghi chú: {faq['note']}",
+                    "",
+                ]
+            )
+    else:
+        lines.append("Không có FAQ đạt kiểm tra chất lượng.")
     return "\n".join(lines)
+
+
+def render_merged_definitions(definitions: list[str]) -> list[str]:
+    lines: list[str] = []
+    for definition in definitions:
+        cleaned_lines = []
+        previous = ""
+        for line in definition.splitlines():
+            stripped = line.strip()
+            if re.match(r"^Điều\s+\d+[a-zA-Z]?\.\s*", stripped, flags=re.IGNORECASE):
+                if previous.lower() == stripped.lower():
+                    continue
+                previous = stripped
+                continue
+            cleaned_lines.append(line)
+        cleaned = "\n".join(cleaned_lines).strip()
+        if cleaned:
+            lines.extend([cleaned, ""])
+    return lines or ["Không phát hiện nội dung giải thích từ ngữ riêng ngoài điều khoản gốc."]
+
+
+def render_original_article_sections(article_knowledge: list[ArticleKnowledge]) -> list[str]:
+    lines: list[str] = []
+    last_chapter = ""
+    last_section = ""
+    last_subsection = ""
+    has_article_group = False
+    for item in article_knowledge:
+        article = item.article
+        first_line = article.raw_content.splitlines()[0].strip() if article.raw_content else ""
+        if article.chapter and article.chapter != last_chapter and article.chapter.strip() != first_line:
+            lines.extend([f"### {article.chapter}", ""])
+            last_chapter = article.chapter
+            last_section = ""
+            last_subsection = ""
+            has_article_group = True
+        if article.section and article.section != last_section:
+            lines.extend([f"### {article.section}", ""])
+            last_section = article.section
+            last_subsection = ""
+            has_article_group = True
+        if article.subsection and article.subsection != last_subsection:
+            lines.extend([f"### {article.subsection}", ""])
+            last_subsection = article.subsection
+            has_article_group = True
+        label = structure_label(article)
+        if label == "Điều" and not has_article_group:
+            lines.extend(["### Điều khoản chính", ""])
+            has_article_group = True
+        heading_level = "####" if label == "Điều" else "###"
+        lines.extend(
+            [
+                f"{heading_level} {label} {article.number}",
+                "",
+                article.raw_content,
+                "",
+            ]
+        )
+    return lines
+
+
+def embed_markdown_section(markdown: str) -> str:
+    lines = markdown.splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if lines and re.match(r"^#{1,2}\s+", lines[0]):
+        lines.pop(0)
+    output: list[str] = []
+    for line in lines:
+        heading_match = re.match(r"^(#{1,5})\s+(.+)$", line)
+        if heading_match:
+            level = min(len(heading_match.group(1)) + 1, 6)
+            output.append(f"{'#' * level} {heading_match.group(2)}")
+        else:
+            output.append(line)
+    return "\n".join(output).strip()
+
+
+def structure_label(article: Article) -> str:
+    first_line = article.raw_content.splitlines()[0].strip() if article.raw_content else ""
+    if re.match(r"^Điều\s+", first_line, flags=re.IGNORECASE):
+        return "Điều"
+    if re.match(r"^Mục\s+", first_line, flags=re.IGNORECASE):
+        return "Mục"
+    if re.match(r"^Chương\s+", first_line, flags=re.IGNORECASE):
+        return "Chương"
+    if re.match(r"^Phần\s+", first_line, flags=re.IGNORECASE):
+        return "Phần"
+    if re.match(r"^[IVXLCDM]+\s*[-–]\s+", first_line, flags=re.IGNORECASE):
+        return "Mục"
+    return "Điều"
 
 
 def render_toc_items(parsed: ParsedDocument) -> list[str]:
@@ -357,7 +468,7 @@ def render_toc_items(parsed: ParsedDocument) -> list[str]:
     for subsection in parsed.subsections:
         lines.append(f"    - {subsection}")
     for article in parsed.articles:
-        lines.append(f"- Điều/Mục {article.number}. {article.title}")
+        lines.append(f"- {structure_label(article)} {article.number}. {article.title}")
     if parsed.appendices:
         lines.append("- Phụ lục, biểu mẫu")
         lines.extend(f"  - {appendix_title(appendix)}" for appendix in parsed.appendices)
@@ -832,6 +943,184 @@ def build_article_faqs(item: ArticleKnowledge) -> list[dict[str, str]]:
             }
         )
     return faqs
+
+
+def quality_checked_faqs(article_knowledge: list[ArticleKnowledge]) -> list[dict[str, str]]:
+    accepted: list[dict[str, str]] = []
+    seen: set[str] = set()
+    article_by_number = {item.article.number: item.article for item in article_knowledge}
+    for item in article_knowledge:
+        for faq in item.faqs:
+            question = faq.get("question", "").strip()
+            normalized_question = normalize_for_compare(question)
+            if not question or normalized_question in seen:
+                continue
+            if is_generic_faq_question(question):
+                continue
+            if not faq_has_direct_basis(faq, item.article, article_by_number):
+                continue
+            accepted.append(faq)
+            seen.add(normalized_question)
+    return accepted
+
+
+def faq_has_direct_basis(faq: dict[str, str], article: Article, article_by_number: dict[str, Article]) -> bool:
+    citation = faq.get("citation", "")
+    refs = re.findall(r"Điều\s+(\d+[a-zA-Z]?|[IVXLCDM]+)", citation, flags=re.IGNORECASE)
+    if not refs:
+        return False
+    if article.number not in refs:
+        return False
+    source_text = " ".join(article_by_number.get(ref, article).raw_content for ref in refs)
+    combined = " ".join([faq.get("question", ""), faq.get("answer", ""), faq.get("note", "")]).lower()
+    if "nội dung gốc" in combined or "không suy luận" in combined or "chỉ xác định" in combined:
+        return True
+    keywords = [keyword.lower() for keyword in extract_keyword_groups(source_text).get("legal", [])]
+    keywords.extend(keyword.lower() for keyword in extract_keyword_groups(source_text).get("business", []))
+    return any(keyword and keyword in source_text.lower() and keyword in combined for keyword in keywords)
+
+
+def is_generic_faq_question(question: str) -> bool:
+    normalized = normalize_for_compare(question)
+    generic_patterns = (
+        r"^dieu nay quy dinh gi$",
+        r"^dieu \d+ quy dinh gi$",
+        r"^dieu \d+ quy dinh noi dung gi$",
+    )
+    return any(re.match(pattern, normalized) for pattern in generic_patterns)
+
+
+def validate_merged_markdown(
+    parsed: ParsedDocument,
+    article_knowledge: list[ArticleKnowledge],
+    markdown: str,
+) -> MergedMarkdownValidationResult:
+    errors: list[str] = []
+    warnings: list[str] = []
+    headings = markdown_headings(markdown)
+
+    if "Điều/Mục" in markdown:
+        errors.append("File hợp nhất còn nhãn cấm 'Điều/Mục'.")
+    if repeated_headings(headings):
+        warnings.append("Có heading bị lặp trong file hợp nhất.")
+    if heading_level_errors(headings):
+        errors.append("Heading Markdown sai cấp hoặc có H1 bên trong nội dung.")
+    if duplicate_article_headings(markdown):
+        errors.append("Tiêu đề Điều bị lặp trong file hợp nhất.")
+    if normalize_for_compare(parsed.scope) and normalize_for_compare(parsed.scope) == normalize_for_compare(parsed.applicable_subjects):
+        errors.append("scope và applicable_subjects bị trùng nhau.")
+    if empty_sections(markdown):
+        errors.append("Có section rỗng trong file hợp nhất.")
+    if article_content_missing(article_knowledge, markdown):
+        errors.append("Mất nội dung gốc của điều khoản trong file hợp nhất.")
+    if article_order_errors(parsed.articles, markdown):
+        errors.append("Thứ tự Điều trong file hợp nhất bị sai.")
+    if appendix_mixed_into_main(article_knowledge):
+        errors.append("Phụ lục/biểu mẫu bị lẫn vào nội dung điều khoản chính.")
+
+    faqs = quality_checked_faqs(article_knowledge)
+    questions = [normalize_for_compare(faq["question"]) for faq in faqs]
+    if find_duplicates(questions):
+        errors.append("FAQ trùng trong file hợp nhất.")
+    if any(is_generic_faq_question(faq["question"]) for faq in faqs):
+        errors.append("FAQ generic trong file hợp nhất.")
+    if not faqs and article_knowledge:
+        warnings.append("Không có FAQ đạt kiểm tra chất lượng để đưa vào file hợp nhất.")
+
+    status = "FAIL" if errors else "WARNING" if warnings else "PASS"
+    return MergedMarkdownValidationResult(status=status, warnings=unique(warnings), errors=unique(errors))
+
+
+def markdown_headings(markdown: str) -> list[tuple[int, str]]:
+    headings: list[tuple[int, str]] = []
+    for line in markdown.splitlines():
+        match = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if match:
+            headings.append((len(match.group(1)), match.group(2).strip()))
+    return headings
+
+
+def repeated_headings(headings: list[tuple[int, str]]) -> list[str]:
+    return find_duplicates([f"{level}:{title}" for level, title in headings])
+
+
+def heading_level_errors(headings: list[tuple[int, str]]) -> list[str]:
+    errors: list[str] = []
+    if not headings or headings[0][0] != 1:
+        errors.append("Heading đầu tiên không phải H1.")
+    for index, (level, title) in enumerate(headings[1:], start=1):
+        previous_level = headings[index - 1][0]
+        if level == 1:
+            errors.append(f"H1 lặp bên trong tài liệu: {title}")
+        if level - previous_level > 1:
+            errors.append(f"Heading nhảy cấp: {title}")
+    return errors
+
+
+def duplicate_article_headings(markdown: str) -> list[str]:
+    article_headings = []
+    for level, title in markdown_headings(markdown):
+        if level <= 4 and re.match(r"^Điều\s+\d+[a-zA-Z]?\.", title, flags=re.IGNORECASE):
+            article_headings.append(title.lower())
+    return find_duplicates(article_headings)
+
+
+def empty_sections(markdown: str) -> list[str]:
+    lines = markdown.splitlines()
+    empty: list[str] = []
+    for index, line in enumerate(lines):
+        heading = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if not heading:
+            continue
+        current_level = len(heading.group(1))
+        content_found = False
+        for next_line in lines[index + 1 :]:
+            next_heading = re.match(r"^(#{1,6})\s+", next_line)
+            if next_heading and len(next_heading.group(1)) > current_level:
+                content_found = True
+                break
+            if next_heading:
+                break
+            if next_line.strip():
+                content_found = True
+                break
+        if not content_found:
+            empty.append(heading.group(2))
+    return empty
+
+
+def article_content_missing(article_knowledge: list[ArticleKnowledge], markdown: str) -> list[str]:
+    missing: list[str] = []
+    for item in article_knowledge:
+        if item.article.raw_content.strip() not in markdown:
+            missing.append(item.article.number)
+    return missing
+
+
+def article_order_errors(articles: list[Article], markdown: str) -> bool:
+    positions: list[int] = []
+    for article in articles:
+        marker = article.raw_content.splitlines()[0].strip()
+        position = markdown.find(marker)
+        if position == -1:
+            return True
+        positions.append(position)
+    return positions != sorted(positions)
+
+
+def appendix_mixed_into_main(article_knowledge: list[ArticleKnowledge]) -> bool:
+    return any(article_contains_appendix_marker(item.article) for item in article_knowledge)
+
+
+def normalize_for_compare(value: str) -> str:
+    value = value.lower()
+    replacements = str.maketrans(
+        "àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ",
+        "aaaaaaaaaaaaaaaaaeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyd",
+    )
+    value = value.translate(replacements)
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def validate_pack(parsed: ParsedDocument, article_knowledge: list[ArticleKnowledge]) -> ValidationResult:

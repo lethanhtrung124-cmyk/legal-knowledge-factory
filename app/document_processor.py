@@ -752,7 +752,7 @@ def detect_scope(articles: list[Article]) -> str:
         title = article.title.lower()
         first_line = article.raw_content.splitlines()[0].lower() if article.raw_content else ""
         if "phạm vi điều chỉnh" in title or "phạm vi điều chỉnh" in first_line or "phạm vi điều chỉnh" in text:
-            return article_body_text(article)
+            return extract_scope_text(article)
     if articles:
         first_article_body = article_body_text(articles[0])
         return first_article_body or articles[0].title or articles[0].raw_content
@@ -766,15 +766,41 @@ def detect_applicable_subjects(articles: list[Article]) -> str:
         first_line = article.raw_content.splitlines()[0].lower() if article.raw_content else ""
         if "đối tượng áp dụng" in title or "đối tượng áp dụng" in first_line:
             subjects = extract_subject_items(article)
-            return "\n".join(f"- {subject}" for subject in subjects)
+            return format_subject_items(subjects)
     inferred = infer_applicable_subjects(articles)
-    return "\n".join(f"- {subject}" for subject in inferred)
+    return format_subject_items(inferred)
+
+
+def format_subject_items(subjects: list[str]) -> str:
+    lines: list[str] = []
+    for subject in subjects:
+        if subject.startswith("  - "):
+            lines.append(subject)
+        else:
+            lines.append(f"- {subject}")
+    return "\n".join(lines)
 
 
 def article_body_text(article: Article) -> str:
     lines = article.raw_content.splitlines()
     body = "\n".join(lines[1:]).strip()
     return body or article.title.strip()
+
+
+def extract_scope_text(article: Article) -> str:
+    body_lines = [normalize_subject_text(line) for line in article.raw_content.splitlines()[1:]]
+    scope_lines: list[str] = []
+    for line in body_lines:
+        if not line:
+            continue
+        lowered = line.lower()
+        if is_applicable_subject_line(line):
+            continue
+        if "quy định" in lowered or "phạm vi điều chỉnh" in lowered:
+            scope_lines.append(line)
+    if scope_lines:
+        return "\n".join(unique_texts(scope_lines))
+    return article_body_text(article)
 
 
 def extract_subject_items(article: Article) -> list[str]:
@@ -791,7 +817,7 @@ def extract_subject_items(article: Article) -> list[str]:
             items.extend(intro_items)
             continue
         items.append(compact)
-    return unique_texts(items)
+    return normalize_subject_activity_items(unique_texts(items))
 
 
 def infer_applicable_subjects(articles: list[Article]) -> list[str]:
@@ -815,6 +841,53 @@ def extract_sentence_with_subjects(text: str) -> str:
         if is_applicable_subject_line(sentence):
             return sentence.strip(" ;.")
     return compact
+
+
+def normalize_subject_activity_items(items: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for item in items:
+        semantic = split_subject_activity(item)
+        if semantic:
+            normalized.extend(semantic)
+        else:
+            normalized.append(item)
+    return unique_texts(normalized)
+
+
+def split_subject_activity(text: str) -> list[str]:
+    lowered = text.lower()
+    subject_patterns = (
+        r"^(?P<subject>cơ quan,\s*tổ chức,\s*cá nhân)\s+(?P<relation>có liên quan đến|liên quan đến)\s+(?P<activity>.+)$",
+        r"^(?P<subject>cơ quan,\s*tổ chức,\s*cá nhân)\s+(?P<relation>tham gia trực tiếp hoặc liên quan đến)\s+(?:các\s+)?hoạt động:\s*(?P<activity>.+)$",
+        r"^(?P<subject>nhà đầu tư và cơ quan,\s*tổ chức,\s*cá nhân)\s+(?P<relation>có liên quan đến|liên quan đến)\s+(?P<activity>.+)$",
+    )
+    for pattern in subject_patterns:
+        match = re.match(pattern, text, flags=re.IGNORECASE)
+        if match:
+            subject = preserve_subject_casing(match.group("subject"), text)
+            activities = split_activity_list(match.group("activity"))
+            lines = [f"Chủ thể: {subject}", "Hoạt động liên quan:"]
+            lines.extend(f"  - {activity}" for activity in activities)
+            return lines
+    if lowered.startswith("cơ quan, tổ chức, cá nhân có liên quan"):
+        return ["Chủ thể: Cơ quan, tổ chức, cá nhân", "Hoạt động liên quan:", "  - nội dung điều chỉnh của văn bản"]
+    return []
+
+
+def preserve_subject_casing(subject: str, source: str) -> str:
+    start = source.lower().find(subject.lower())
+    if start >= 0:
+        return source[start : start + len(subject)].strip()
+    return subject.strip()
+
+
+def split_activity_list(activity: str) -> list[str]:
+    cleaned = activity.strip(" ;.")
+    if ";" in cleaned or "\n" in cleaned:
+        parts = [part.strip(" ;.") for part in re.split(r";|\n", cleaned) if part.strip(" ;.")]
+    else:
+        parts = [cleaned]
+    return parts or [cleaned]
 
 
 def normalize_subject_text(line: str) -> str:
@@ -842,6 +915,8 @@ def split_subject_sentence(text: str) -> list[str]:
         text,
         flags=re.IGNORECASE,
     )
+    if "các hoạt động:" in cleaned.lower():
+        return [cleaned.strip(" ;.")]
     parts = [part.strip(" ;.") for part in re.split(r";|\n", cleaned) if part.strip(" ;.")]
     return parts or [cleaned.strip(" ;.")]
 
