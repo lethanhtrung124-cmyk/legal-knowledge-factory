@@ -334,9 +334,9 @@ def render_gpt_knowledge_markdown(parsed: ParsedDocument, article_knowledge: lis
     else:
         lines.append("Không phát hiện phụ lục/biểu mẫu.")
 
-    lines.extend(["", "## Bảng tra cứu", "", embed_markdown_section(render_lookup(article_knowledge)), ""])
-    lines.extend(["", "## Chủ đề", "", embed_markdown_section(render_topics(article_knowledge)), ""])
-    lines.extend(["", "## Từ khóa", "", embed_markdown_section(render_keyword_index(article_knowledge)), ""])
+    lines.extend(["", "## Bảng tra cứu", "", embed_markdown_section(render_lookup(article_knowledge), "Không phát hiện dữ liệu tra cứu."), ""])
+    lines.extend(["", "## Chủ đề", "", embed_markdown_section(render_topics(article_knowledge), "Không phát hiện chủ đề đạt tiêu chí."), ""])
+    lines.extend(["", "## Từ khóa", "", embed_markdown_section(render_keyword_index(article_knowledge), "Không phát hiện từ khóa đạt tiêu chí."), ""])
     lines.extend(["", "## Tóm tắt theo điều khoản", ""])
     for item in article_knowledge:
         article = item.article
@@ -403,12 +403,12 @@ def render_original_article_sections(article_knowledge: list[ArticleKnowledge]) 
             last_subsection = ""
             has_article_group = True
         if article.section and article.section != last_section:
-            lines.extend([f"### {article.section}", ""])
+            lines.extend([nested_structure_heading(article.section, under_chapter=bool(last_chapter)), ""])
             last_section = article.section
             last_subsection = ""
             has_article_group = True
         if article.subsection and article.subsection != last_subsection:
-            lines.extend([f"### {article.subsection}", ""])
+            lines.extend([nested_structure_heading(article.subsection, under_chapter=bool(last_chapter or last_section)), ""])
             last_subsection = article.subsection
             has_article_group = True
         label = structure_label(article)
@@ -427,7 +427,13 @@ def render_original_article_sections(article_knowledge: list[ArticleKnowledge]) 
     return lines
 
 
-def embed_markdown_section(markdown: str) -> str:
+def nested_structure_heading(title: str, under_chapter: bool) -> str:
+    if under_chapter:
+        return f"**{title}**"
+    return f"### {title}"
+
+
+def embed_markdown_section(markdown: str, fallback: str) -> str:
     lines = markdown.splitlines()
     while lines and not lines[0].strip():
         lines.pop(0)
@@ -441,7 +447,7 @@ def embed_markdown_section(markdown: str) -> str:
             output.append(f"{'#' * level} {heading_match.group(2)}")
         else:
             output.append(line)
-    return "\n".join(output).strip()
+    return "\n".join(output).strip() or fallback
 
 
 def structure_label(article: Article) -> str:

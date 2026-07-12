@@ -100,3 +100,37 @@ def test_merged_markdown_uses_muc_for_thematic_resolution_without_duplicate_chap
     assert "Điều/Mục" not in content
     assert "### Mục I" in content
     assert content.count("### I- QUAN ĐIỂM CHỈ ĐẠO") == 0
+
+
+def test_merged_validator_accepts_chapter_with_nested_sections():
+    articles = [
+        Article(
+            number="17",
+            title="Đào tạo, phát triển nguồn nhân lực số",
+            raw_content="Điều 17. Đào tạo, phát triển nguồn nhân lực số\n1. Nội dung đào tạo.",
+            chapter="Chương V",
+            section="Mục 1. ĐÀO TẠO, PHÁT TRIỂN NGUỒN NHÂN LỰC SỐ",
+            clauses=["1. Nội dung đào tạo."],
+        ),
+        Article(
+            number="18",
+            title="Thu hút chuyên gia",
+            raw_content="Điều 18. Thu hút chuyên gia\n1. Nội dung thu hút.",
+            chapter="Chương V",
+            section="Mục 1. ĐÀO TẠO, PHÁT TRIỂN NGUỒN NHÂN LỰC SỐ",
+            clauses=["1. Nội dung thu hút."],
+        ),
+    ]
+    parsed = make_parsed_document()
+    parsed.articles = articles
+    parsed.chapters = ["Chương V"]
+    parsed.sections = ["Mục 1. ĐÀO TẠO, PHÁT TRIỂN NGUỒN NHÂN LỰC SỐ"]
+    parsed.raw_text = "\n".join(article.raw_content for article in articles)
+    parsed.main_text = parsed.raw_text
+
+    article_knowledge = build_article_knowledge(parsed)
+    content = render_gpt_knowledge_markdown(parsed, article_knowledge)
+    validation = validate_merged_markdown(parsed, article_knowledge, content)
+
+    assert validation.status != "FAIL"
+    assert "**Mục 1. ĐÀO TẠO, PHÁT TRIỂN NGUỒN NHÂN LỰC SỐ**" in content
