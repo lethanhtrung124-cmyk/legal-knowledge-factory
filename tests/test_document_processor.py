@@ -9,6 +9,7 @@ from app.document_processor import (
     extract_closing_metadata,
     parse_appendices,
     parse_structure,
+    parse_thematic_structure,
     split_main_and_appendix,
     split_main_appendix_closing,
     split_preamble_and_basis,
@@ -40,6 +41,38 @@ def test_metadata_parser_handles_resolution_number_with_dot():
 
     assert detect_document_type(lines) == "Nghị quyết"
     assert detect_document_number(lines) == "66.17/2026/NQ-CP"
+
+
+def test_metadata_parser_handles_party_resolution_number_with_dash():
+    lines = [
+        "BAN CHẤP HÀNH TRUNG ƯƠNG",
+        "Số 57-NQ/TW",
+        "NGHỊ QUYẾT",
+        "CỦA BỘ CHÍNH TRỊ",
+        "Về đột phá phát triển khoa học, công nghệ",
+    ]
+
+    assert detect_document_type(lines) == "Nghị quyết"
+    assert detect_document_number(lines) == "57-NQ/TW"
+    assert detect_issuing_authority(lines, "Nghị quyết") == "Ban Chấp hành Trung ương"
+
+
+def test_party_resolution_title_skips_issuer_subtitle():
+    lines = [
+        "Số 57-NQ/TW",
+        "NGHỊ QUYẾT",
+        "CỦA BỘ CHÍNH TRỊ",
+        "VỀ ĐỘT PHÁ PHÁT TRIỂN KHOA HỌC, CÔNG NGHỆ",
+        "Phát triển khoa học, công nghệ là yếu tố quyết định.",
+    ]
+
+    assert detect_title(lines, "Nghị quyết") == "Về đột phá phát triển khoa học, công nghệ"
+
+
+def test_party_resolution_signature_authority_is_bo_chinh_tri():
+    closing_lines = ["Nơi nhận:", "- Lưu Văn phòng Trung ương Đảng.", "T/M BỘ CHÍNH TRỊ", "TỔNG BÍ THƯ", "Tô Lâm"]
+
+    assert detect_issuing_authority([], "Nghị quyết", closing_lines) == "Bộ Chính trị"
 
 
 def test_metadata_parser_handles_law_number_line_without_cutting_suffix():
@@ -96,6 +129,24 @@ def test_article_parser_stops_before_appendix():
 
     assert [article.number for article in articles] == ["1"]
     assert appendix_lines[0] == "PHỤ LỤC I"
+
+
+def test_thematic_structure_parses_roman_sections_without_articles():
+    lines = [
+        "NGHỊ QUYẾT",
+        "I- QUAN ĐIỂM CHỈ ĐẠO",
+        "1. Nội dung quan điểm.",
+        "II- MỤC TIÊU",
+        "1. Đến năm 2030.",
+        "Nơi nhận:",
+        "T/M BỘ CHÍNH TRỊ",
+    ]
+
+    chapters, _, _, articles = parse_thematic_structure(lines)
+
+    assert chapters == ["I- QUAN ĐIỂM CHỈ ĐẠO", "II- MỤC TIÊU"]
+    assert [article.number for article in articles] == ["I", "II"]
+    assert articles[0].title == "QUAN ĐIỂM CHỈ ĐẠO"
 
 
 def test_appendix_detector_detects_forms():
@@ -349,6 +400,20 @@ def test_applicable_subjects_are_normalized_list_not_raw_article():
     assert "Điều 2" not in result
 
 
+def test_combined_scope_and_subjects_article_uses_application_clause_only():
+    article = Article(
+        number="1",
+        title="Phạm vi điều chỉnh và đối tượng áp dụng",
+        raw_content=(
+            "Điều 1. Phạm vi điều chỉnh và đối tượng áp dụng\n"
+            "1. Nghị quyết này quy định việc cắt giảm ngành nghề đầu tư kinh doanh có điều kiện.\n"
+            "2. Nghị quyết này áp dụng đối với nhà đầu tư và cơ quan, tổ chức, cá nhân liên quan."
+        ),
+    )
+
+    assert detect_applicable_subjects([article]) == "- nhà đầu tư và cơ quan, tổ chức, cá nhân liên quan"
+
+
 def test_metadata_scope_and_subjects_have_fallbacks():
     from app.document_processor import detect_scope
 
@@ -361,7 +426,7 @@ def test_metadata_scope_and_subjects_have_fallbacks():
     ]
 
     assert detect_scope(articles) == "Thông tư này quy định về hồ sơ điện tử của cơ quan, tổ chức, cá nhân."
-    assert detect_applicable_subjects(articles) == "- Thông tư này quy định về hồ sơ điện tử của cơ quan, tổ chức, cá nhân"
+    assert detect_applicable_subjects(articles) == "- Cơ quan, tổ chức, cá nhân có liên quan đến nội dung điều chỉnh của văn bản"
 
 
 def test_authority_name_is_normalized_to_official_casing():

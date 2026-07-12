@@ -204,6 +204,7 @@ def build_knowledge_pack(parsed: ParsedDocument, output_root: Path | None = None
     write_text(indexes_dir / "topic_index.md", render_topic_index(article_knowledge))
     write_json(indexes_dir / "article_index.json", build_article_index(article_knowledge))
     write_json(indexes_dir / "citation_index.json", build_citation_index(article_knowledge))
+    write_text(pack_dir / gpt_knowledge_file_name(parsed), render_gpt_knowledge_markdown(parsed, article_knowledge))
 
     zip_path = shutil.make_archive(str(pack_dir), "zip", root_dir=pack_dir)
     logger.info("Knowledge Pack created: %s", zip_path)
@@ -249,6 +250,118 @@ generated_at: "{datetime.now().isoformat(timespec='seconds')}"
 source_priority: "original_text"
 privacy: "MVP xử lý cục bộ, không gửi dữ liệu ra ngoài."
 """
+
+
+def render_gpt_knowledge_markdown(parsed: ParsedDocument, article_knowledge: list[ArticleKnowledge]) -> str:
+    lines = [
+        f"# GPT Knowledge - {parsed.title}",
+        "",
+        "Tài liệu hợp nhất dùng để nạp vào Custom GPT. Nội dung gốc được đặt trước các phần tóm tắt, từ khóa và FAQ.",
+        "",
+        "## Metadata",
+        "",
+        f"- Loại văn bản: {parsed.document_type}",
+        f"- Số/ký hiệu: {parsed.document_number}",
+        f"- Cơ quan ban hành: {parsed.issuing_authority}",
+        f"- Ngày ban hành: {parsed.issued_date}",
+        f"- Hiệu lực: {parsed.effective_date or 'Không phát hiện trong văn bản'}",
+        f"- Tên văn bản: {parsed.title}",
+        f"- Số chương/mục lớn: {len(parsed.chapters)}",
+        f"- Số điều/mục nội dung chính: {len(parsed.articles)}",
+        f"- Số phụ lục/biểu mẫu: {len(parsed.appendices)}",
+        "",
+        "## Phạm vi điều chỉnh",
+        "",
+        parsed.scope or "Không phát hiện.",
+        "",
+        "## Đối tượng áp dụng",
+        "",
+        parsed.applicable_subjects or "Không phát hiện.",
+        "",
+        "## Căn cứ pháp lý",
+        "",
+    ]
+    if parsed.legal_basis:
+        lines.extend(f"- {item}" for item in parsed.legal_basis)
+    else:
+        lines.append("Không phát hiện căn cứ pháp lý riêng.")
+
+    lines.extend(["", "## Mục lục", ""])
+    lines.extend(render_toc_items(parsed))
+
+    lines.extend(["", "## Giải thích từ ngữ", ""])
+    if parsed.definitions:
+        lines.extend(parsed.definitions)
+    else:
+        lines.append("Không phát hiện điều khoản giải thích từ ngữ riêng trong văn bản.")
+
+    lines.extend(
+        [
+            "",
+            "## Nội dung gốc điều khoản",
+            "",
+            "Các nội dung dưới đây là nguồn ưu tiên cao nhất khi trả lời. Không suy luận vượt quá nội dung gốc.",
+            "",
+        ]
+    )
+    for item in article_knowledge:
+        article = item.article
+        lines.extend(
+            [
+                f"### Điều/Mục {article.number}. {article.title or 'Không có tiêu đề'}",
+                "",
+                article.raw_content,
+                "",
+            ]
+        )
+
+    lines.extend(["", "## Phụ lục", ""])
+    if parsed.appendices:
+        for appendix in parsed.appendices:
+            lines.extend(
+                [
+                    f"### {appendix_title(appendix)}",
+                    "",
+                    appendix.raw_content,
+                    "",
+                ]
+            )
+    else:
+        lines.append("Không phát hiện phụ lục/biểu mẫu.")
+
+    lines.extend(["", "## Bảng tra cứu", "", render_lookup(article_knowledge), ""])
+    lines.extend(["", "## Chủ đề", "", render_topics(article_knowledge), ""])
+    lines.extend(["", "## Từ khóa", "", render_keyword_index(article_knowledge), ""])
+    lines.extend(["", "## Tóm tắt theo điều khoản", ""])
+    for item in article_knowledge:
+        article = item.article
+        lines.extend(
+            [
+                f"### Điều/Mục {article.number}. {article.title or 'Không có tiêu đề'}",
+                "",
+                summarize(article.raw_content),
+                "",
+            ]
+        )
+
+    lines.extend(["", "## FAQ", "", render_faq(parsed, article_knowledge)])
+    return "\n".join(lines)
+
+
+def render_toc_items(parsed: ParsedDocument) -> list[str]:
+    lines: list[str] = []
+    for chapter in parsed.chapters:
+        lines.append(f"- {chapter}")
+    for section in parsed.sections:
+        lines.append(f"  - {section}")
+    for subsection in parsed.subsections:
+        lines.append(f"    - {subsection}")
+    for article in parsed.articles:
+        lines.append(f"- Điều/Mục {article.number}. {article.title}")
+    if parsed.appendices:
+        lines.append("- Phụ lục, biểu mẫu")
+        lines.extend(f"  - {appendix_title(appendix)}" for appendix in parsed.appendices)
+    return lines or ["Không phát hiện mục lục."]
 
 
 def render_toc(parsed: ParsedDocument) -> str:
@@ -901,6 +1014,10 @@ def appendix_title(appendix: Appendix) -> str:
 def document_folder_name(parsed: ParsedDocument) -> str:
     source = parsed.document_number or Path(parsed.file_name).stem or uuid4().hex[:8]
     return slugify(source)
+
+
+def gpt_knowledge_file_name(parsed: ParsedDocument) -> str:
+    return f"GPT_KNOWLEDGE_{document_folder_name(parsed)}.md"
 
 
 def slugify(value: str) -> str:

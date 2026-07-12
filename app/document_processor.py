@@ -63,6 +63,7 @@ class ParsedDocument:
 
 
 ARTICLE_RE = re.compile(r"^Điều\s+(\d+[a-zA-Z]?)\.\s*(.*)$", re.IGNORECASE)
+THEMATIC_SECTION_RE = re.compile(r"^([IVXLCDM]+)\s*[-–]\s+(.+)$", re.IGNORECASE)
 CHAPTER_RE = re.compile(r"^Chương\s+([IVXLCDM]+|\d+)\b\.?\s*(.*)$", re.IGNORECASE)
 SECTION_RE = re.compile(r"^Mục\s+(\d+)\b\.?\s*(.*)$", re.IGNORECASE)
 SUBSECTION_RE = re.compile(r"^Tiểu\s+mục\s+(\d+)\b\.?\s*(.*)$", re.IGNORECASE)
@@ -75,11 +76,11 @@ DOCUMENT_KIND_NAMES = ("Luật", "Nghị định", "Nghị quyết", "Thông tư
 DOCUMENT_KIND_HEADING_RE = re.compile(r"^(LUẬT|NGHỊ\s+ĐỊNH|NGHỊ\s+QUYẾT|THÔNG\s+TƯ|QUYẾT\s+ĐỊNH|CÔNG\s+VĂN)$", re.IGNORECASE)
 TYPE_NUMBER_RE = re.compile(
     r"^(Luật|Nghị\s+định|Nghị\s+quyết|Thông\s+tư|Quyết\s+định|Công\s+văn)\s+số\s*:?\s*"
-    r"([0-9]+(?:\.[0-9]+)*(?:/[0-9]{4})?/[A-ZĐ0-9]{1,12}(?:-[A-ZĐ0-9]{1,12})*)\b",
+    r"([0-9]+(?:\.[0-9]+)*(?:/[0-9]{4})?(?:/|-)[A-ZĐ0-9]{1,12}(?:[-/][A-ZĐ0-9]{1,12})*)\b",
     re.IGNORECASE,
 )
 DOCUMENT_NUMBER_RE = re.compile(
-    r"\bSố\s*:?\s*([0-9]+(?:\.[0-9]+)*(?:/[0-9]{4})?/[A-ZĐ0-9]{1,12}(?:-[A-ZĐ0-9]{1,12})*)",
+    r"\bSố\s*:?\s*([0-9]+(?:\.[0-9]+)*(?:/[0-9]{4})?(?:/|-)[A-ZĐ0-9]{1,12}(?:[-/][A-ZĐ0-9]{1,12})*)",
     re.IGNORECASE,
 )
 DATE_RE = re.compile(
@@ -91,11 +92,11 @@ LEGAL_BASIS_RE = re.compile(r"^Căn cứ\b", re.IGNORECASE)
 PROPOSAL_RE = re.compile(r"^(Theo đề nghị|Xét đề nghị)\b", re.IGNORECASE)
 MAIN_START_RE = re.compile(r"^(Chương\s+|Điều\s+1\.)", re.IGNORECASE)
 CLOSING_START_RE = re.compile(
-    r"^(Nơi\s+nhận\b|TM\.(?:\s|$)|KT\.(?:\s|$)|TL\.(?:\s|$)|TUQ\.(?:\s|$))",
+    r"^(Nơi\s+nhận\b|TM\.(?:\s|$)|T/M(?:\s|$)|KT\.(?:\s|$)|TL\.(?:\s|$)|TUQ\.(?:\s|$))",
     re.IGNORECASE,
 )
 SIGNER_TITLE_RE = re.compile(
-    r"^(TM\.(?:\s|$)|KT\.(?:\s|$)|TL\.(?:\s|$)|TUQ\.(?:\s|$)|CHỦ\s+TỊCH|BỘ\s+TRƯỞNG|THỦ\s+TƯỚNG|PHÓ\s+THỦ\s+TƯỚNG|CHÁNH\s+ÁN|VIỆN\s+TRƯỞNG)",
+    r"^(TM\.(?:\s|$)|T/M(?:\s|$)|KT\.(?:\s|$)|TL\.(?:\s|$)|TUQ\.(?:\s|$)|CHỦ\s+TỊCH|BỘ\s+TRƯỞNG|THỦ\s+TƯỚNG|PHÓ\s+THỦ\s+TƯỚNG|CHÁNH\s+ÁN|VIỆN\s+TRƯỞNG|TỔNG\s+BÍ\s+THƯ)",
     re.IGNORECASE,
 )
 SIGNER_ONLY_TITLE_RE = re.compile(
@@ -128,6 +129,8 @@ def parse_document(path: Path) -> ParsedDocument:
     title = detect_title(lines, document_type)
     preamble_lines, legal_basis = split_preamble_and_basis(lines)
     chapters, sections, subsections, articles = parse_structure(main_lines)
+    if not articles:
+        chapters, sections, subsections, articles = parse_thematic_structure(main_lines)
     appendices = parse_appendices(appendix_lines)
     definitions = extract_definitions(articles)
     scope = detect_scope(articles)
@@ -309,6 +312,8 @@ def detect_issuing_authority(lines: list[str], document_type: str, closing_lines
         "VIỆN KIỂM SÁT NHÂN DÂN TỐI CAO",
         "ỦY BAN NHÂN DÂN",
         "HỘI ĐỒNG NHÂN DÂN",
+        "BAN CHẤP HÀNH TRUNG ƯƠNG",
+        "BỘ CHÍNH TRỊ",
     )
     for index, line in enumerate(lines[:80]):
         if LEGAL_BASIS_RE.match(line):
@@ -322,6 +327,8 @@ def detect_issuing_authority(lines: list[str], document_type: str, closing_lines
         if upper_type == "NGHỊ ĐỊNH" and "CHÍNH PHỦ" in upper:
             return normalize_authority_name(collect_authority_heading(lines, index))
         if upper_type == "NGHỊ QUYẾT" and ("CHÍNH PHỦ" in upper or "QUỐC HỘI" in upper or "ỦY BAN THƯỜNG VỤ QUỐC HỘI" in upper):
+            return normalize_authority_name(collect_authority_heading(lines, index))
+        if upper_type == "NGHỊ QUYẾT" and ("BỘ CHÍNH TRỊ" in upper or "BAN CHẤP HÀNH TRUNG ƯƠNG" in upper):
             return normalize_authority_name(collect_authority_heading(lines, index))
         if upper_type == "THÔNG TƯ" and ("BỘ " in upper or "NGÂN HÀNG NHÀ NƯỚC" in upper):
             return normalize_authority_name(collect_authority_heading(lines, index))
@@ -340,10 +347,13 @@ def detect_issuing_authority_from_signature(lines: list[str]) -> str:
         upper = compact.upper()
         if upper.startswith("TM."):
             authority = compact[3:].strip()
-            return "" if is_signer_title(authority) else authority
+            return "" if is_signer_title(authority) else normalize_authority_name(authority)
+        if upper.startswith("T/M"):
+            authority = re.sub(r"^T/M\.?\s*", "", compact, flags=re.IGNORECASE).strip()
+            return "" if is_signer_title(authority) else normalize_authority_name(authority)
         if upper.startswith(("KT.", "TL.", "TUQ.")):
             continue
-        if upper in {"CHÍNH PHỦ", "QUỐC HỘI"} or upper.startswith(("BỘ ", "ỦY BAN NHÂN DÂN", "HỘI ĐỒNG NHÂN DÂN")):
+        if upper in {"CHÍNH PHỦ", "QUỐC HỘI", "BỘ CHÍNH TRỊ", "BAN CHẤP HÀNH TRUNG ƯƠNG"} or upper.startswith(("BỘ ", "ỦY BAN NHÂN DÂN", "HỘI ĐỒNG NHÂN DÂN")):
             return "" if is_signer_title(compact) else compact
     return ""
 
@@ -382,7 +392,7 @@ def is_signer_title(value: str) -> bool:
         return False
     if re.match(r"^(KT\.|TL\.|TUQ\.)\s+", compact, flags=re.IGNORECASE):
         return True
-    without_tm = re.sub(r"^TM\.\s+", "", compact, flags=re.IGNORECASE)
+    without_tm = re.sub(r"^(TM\.|T/M\.?)\s+", "", compact, flags=re.IGNORECASE)
     upper = without_tm.upper()
     if upper.startswith(("BỘ TRƯỞNG BỘ ", "THỦ TRƯỞNG CƠ QUAN ")):
         return False
@@ -393,6 +403,18 @@ def is_signer_heading_line(value: str) -> bool:
     compact = re.sub(r"\s+", " ", value.strip())
     without_tm = re.sub(r"^TM\.\s+", "", compact, flags=re.IGNORECASE)
     return bool(SIGNER_ONLY_TITLE_RE.match(without_tm))
+
+
+def is_issuer_subtitle_line(value: str) -> bool:
+    upper = re.sub(r"\s+", " ", value.strip()).upper()
+    return upper in {
+        "CỦA BỘ CHÍNH TRỊ",
+        "CỦA BAN BÍ THƯ",
+        "CỦA BAN CHẤP HÀNH TRUNG ƯƠNG",
+        "CỦA CHÍNH PHỦ",
+        "CỦA QUỐC HỘI",
+        "CỦA ỦY BAN THƯỜNG VỤ QUỐC HỘI",
+    }
 
 
 def normalize_authority_name(value: str) -> str:
@@ -417,6 +439,8 @@ def normalize_authority_name(value: str) -> str:
         "Viện Kiểm Sát Nhân Dân Tối Cao": "Viện kiểm sát nhân dân tối cao",
         "Ủy Ban Nhân Dân": "Ủy ban nhân dân",
         "Hội Đồng Nhân Dân": "Hội đồng nhân dân",
+        "Ban Chấp Hành Trung Ương": "Ban Chấp hành Trung ương",
+        "Bộ Chính Trị": "Bộ Chính trị",
         " Và ": " và ",
         " Của ": " của ",
         " Trực Thuộc ": " trực thuộc ",
@@ -458,10 +482,14 @@ def detect_title(lines: list[str], document_type: str) -> str:
                 break
             if is_signer_heading_line(next_line):
                 break
+            if is_issuer_subtitle_line(next_line):
+                continue
             if TYPE_NUMBER_RE.match(next_line) or DOCUMENT_KIND_HEADING_RE.match(next_line.strip()):
                 continue
             if re.search(r"^(Số|CỘNG HÒA|Độc lập|Hà Nội|TP\.)\b", next_line, flags=re.IGNORECASE):
                 continue
+            if title_lines and is_upper_heading(title_lines[-1]) and not is_upper_heading(next_line):
+                break
             if len(next_line) > 260:
                 break
             title_lines.append(next_line)
@@ -652,6 +680,37 @@ def parse_structure(lines: list[str]) -> tuple[list[str], list[str], list[str], 
     return chapters, sections, subsections, articles
 
 
+def parse_thematic_structure(lines: list[str]) -> tuple[list[str], list[str], list[str], list[Article]]:
+    chapters: list[str] = []
+    sections: list[str] = []
+    articles: list[Article] = []
+    current_article: Article | None = None
+
+    for line in lines:
+        if is_appendix_start(line) or is_closing_start(line):
+            break
+        section_match = THEMATIC_SECTION_RE.match(line)
+        if section_match:
+            current_heading = line
+            chapters.append(line)
+            current_article = Article(
+                number=section_match.group(1).upper(),
+                title=section_match.group(2).strip(),
+                raw_content=line,
+                chapter=current_heading,
+            )
+            articles.append(current_article)
+            continue
+        if current_article:
+            current_article.raw_content += "\n" + line
+            if CLAUSE_RE.match(line):
+                current_article.clauses.append(line)
+            if POINT_RE.match(line):
+                current_article.points.append(line)
+
+    return chapters, sections, [], articles
+
+
 def parse_appendices(lines: list[str]) -> list[Appendix]:
     appendices: list[Appendix] = []
     current: Appendix | None = None
@@ -720,9 +779,11 @@ def article_body_text(article: Article) -> str:
 
 def extract_subject_items(article: Article) -> list[str]:
     body_lines = article.raw_content.splitlines()[1:]
+    normalized_lines = [normalize_subject_text(line) for line in body_lines]
+    application_lines = [line for line in normalized_lines if is_applicable_subject_line(line)]
+    source_lines = application_lines or normalized_lines
     items: list[str] = []
-    for line in body_lines:
-        compact = normalize_subject_text(line)
+    for compact in source_lines:
         if not compact:
             continue
         if looks_like_subject_intro(compact):
@@ -736,12 +797,14 @@ def extract_subject_items(article: Article) -> list[str]:
 def infer_applicable_subjects(articles: list[Article]) -> list[str]:
     candidate_texts = [article_body_text(article) for article in articles[:5]]
     for text in candidate_texts:
-        lowered = text.lower()
-        if "cơ quan, tổ chức, cá nhân" in lowered:
-            return [extract_sentence_with_subjects(text)]
-        if "tổ chức, cá nhân" in lowered:
+        if is_applicable_subject_line(text):
             return [extract_sentence_with_subjects(text)]
     return ["Cơ quan, tổ chức, cá nhân có liên quan đến nội dung điều chỉnh của văn bản"]
+
+
+def is_applicable_subject_line(text: str) -> bool:
+    lowered = text.lower()
+    return "áp dụng đối với" in lowered or "đối tượng áp dụng" in lowered
 
 
 def extract_sentence_with_subjects(text: str) -> str:
@@ -749,7 +812,7 @@ def extract_sentence_with_subjects(text: str) -> str:
     sentences = re.split(r"(?<=[.!?])\s+", compact)
     for sentence in sentences:
         lowered = sentence.lower()
-        if "cơ quan, tổ chức, cá nhân" in lowered or "tổ chức, cá nhân" in lowered:
+        if is_applicable_subject_line(sentence):
             return sentence.strip(" ;.")
     return compact
 
@@ -763,12 +826,18 @@ def normalize_subject_text(line: str) -> str:
 
 def looks_like_subject_intro(text: str) -> bool:
     lowered = text.lower()
-    return lowered.startswith(("văn bản này áp dụng đối với", "nghị định này áp dụng đối với", "thông tư này áp dụng đối với", "luật này áp dụng đối với"))
+    return lowered.startswith((
+        "văn bản này áp dụng đối với",
+        "nghị định này áp dụng đối với",
+        "nghị quyết này áp dụng đối với",
+        "thông tư này áp dụng đối với",
+        "luật này áp dụng đối với",
+    ))
 
 
 def split_subject_sentence(text: str) -> list[str]:
     cleaned = re.sub(
-        r"^(văn bản này|nghị định này|thông tư này|luật này)\s+áp dụng\s+đối\s+với\s+",
+        r"^(văn bản này|nghị định này|nghị quyết này|thông tư này|luật này)\s+áp dụng\s+đối\s+với\s+",
         "",
         text,
         flags=re.IGNORECASE,
