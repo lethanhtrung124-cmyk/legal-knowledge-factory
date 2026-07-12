@@ -64,7 +64,7 @@ def wait_for_server() -> None:
     raise RuntimeError("Server did not start in time.")
 
 
-def upload_docx(path: Path) -> bytes:
+def upload_docx(path: Path) -> tuple[bytes, str]:
     boundary = "----codexboundary"
     data = path.read_bytes()
     head = (
@@ -84,7 +84,17 @@ def upload_docx(path: Path) -> bytes:
     payload = response.read()
     if response.status != 200:
         raise RuntimeError(payload[:500].decode("utf-8", errors="replace"))
-    return payload
+    return payload, response.getheader("X-GPT-Knowledge-Url") or ""
+
+
+def download_markdown(markdown_url: str) -> str:
+    connection = http.client.HTTPConnection(HOST, PORT, timeout=30)
+    connection.request("GET", markdown_url)
+    response = connection.getresponse()
+    payload = response.read()
+    if response.status != 200:
+        raise RuntimeError(payload[:500].decode("utf-8", errors="replace"))
+    return payload.decode("utf-8")
 
 
 def main() -> None:
@@ -97,7 +107,10 @@ def main() -> None:
     thread.start()
 
     wait_for_server()
-    payload = upload_docx(sample_path)
+    payload, markdown_url = upload_docx(sample_path)
+    if not markdown_url.startswith("/api/knowledge-markdown/GPT_KNOWLEDGE_"):
+        raise RuntimeError(f"Missing GPT Markdown download URL: {markdown_url}")
+    markdown = download_markdown(markdown_url)
     names = zipfile.ZipFile(BytesIO(payload)).namelist()
     archive = zipfile.ZipFile(BytesIO(payload))
     required = {
@@ -123,6 +136,8 @@ def main() -> None:
         raise RuntimeError(f"Missing files: {missing}")
     if "articles/dieu_093.md" in names:
         raise RuntimeError("Appendix content was incorrectly parsed as article 93.")
+    if any(name.startswith("GPT_KNOWLEDGE_") for name in names):
+        raise RuntimeError("GPT Markdown should be downloaded independently, not embedded in the zip.")
     metadata = archive.read("00_metadata.yaml").decode("utf-8")
     faq = archive.read("05_faq.md").decode("utf-8")
     prompt = archive.read("06_prompt_system.md").decode("utf-8")
@@ -147,6 +162,9 @@ def main() -> None:
         "prompt_priority": "Thứ tự ưu tiên nguồn" in prompt,
         "appendix_note": "Đây không phải là điều khoản chính" in appendix,
         "validation_status": "- Kết luận: PASS" in validation or "- Kết luận: WARNING" in validation,
+        "merged_markdown_title": markdown.startswith("# Quy định về kiểm thử Knowledge Pack"),
+        "merged_markdown_original": "Điều 92. Nội dung nghiệp vụ 92" in markdown,
+        "merged_markdown_no_prompt": "System Prompt" not in markdown,
     }
     failed = [name for name, passed in checks.items() if not passed]
     if failed:

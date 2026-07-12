@@ -1,6 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -9,7 +10,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from .config import ALLOWED_EXTENSIONS, FRONTEND_ORIGIN, MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, OUTPUT_DIR, UPLOAD_DIR
 from .document_processor import parse_document
-from .knowledge_pack import build_knowledge_pack
+from .knowledge_pack import build_knowledge_pack, gpt_knowledge_file_name
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,7 +39,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Validation-Status"],
+    expose_headers=["X-Validation-Status", "X-GPT-Knowledge-Url"],
 )
 
 
@@ -50,6 +51,18 @@ def index() -> str:
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/knowledge-markdown/{file_name}")
+def download_knowledge_markdown(file_name: str):
+    safe_name = Path(file_name).name
+    if safe_name != file_name or not safe_name.startswith("GPT_KNOWLEDGE_") or not safe_name.endswith(".md"):
+        raise HTTPException(status_code=400, detail="Tên file GPT Markdown không hợp lệ.")
+
+    markdown_path = OUTPUT_DIR / "knowledge_packs" / safe_name
+    if not markdown_path.exists():
+        raise HTTPException(status_code=404, detail="Không tìm thấy file GPT Markdown.")
+    return FileResponse(markdown_path, media_type="text/markdown; charset=utf-8", filename=safe_name)
 
 
 @app.post("/api/knowledge-pack", response_model=None)
@@ -73,6 +86,7 @@ async def create_knowledge_pack(file: UploadFile = File(...)):
     try:
         parsed = parse_document(upload_path)
         zip_path = build_knowledge_pack(parsed)
+        gpt_markdown_name = gpt_knowledge_file_name(parsed)
         report_path = zip_path.with_suffix("") / "validation_report.md"
         validation_report = report_path.read_text(encoding="utf-8") if report_path.exists() else ""
         if "- Kết luận: FAIL" in validation_report:
@@ -92,6 +106,7 @@ async def create_knowledge_pack(file: UploadFile = File(...)):
 
     download_name = f"{Path(original_name).stem}_knowledge_pack.zip"
     response = FileResponse(zip_path, media_type="application/zip", filename=download_name)
+    response.headers["X-GPT-Knowledge-Url"] = f"/api/knowledge-markdown/{quote(gpt_markdown_name)}"
     if validation_report:
         status_line = next((line for line in validation_report.splitlines() if line.startswith("- Kết luận:")), "")
         response.headers["X-Validation-Status"] = status_line.replace("- Kết luận:", "").strip()
@@ -303,6 +318,15 @@ INDEX_HTML = """
         link.className = "download";
         link.textContent = "Tải file .zip";
         downloadArea.appendChild(link);
+        const markdownUrl = response.headers.get("X-GPT-Knowledge-Url");
+        if (markdownUrl) {
+          const markdownLink = document.createElement("a");
+          markdownLink.href = markdownUrl;
+          markdownLink.download = `${baseName}_gpt_knowledge.md`;
+          markdownLink.className = "download";
+          markdownLink.textContent = "Tải file GPT Markdown";
+          downloadArea.appendChild(markdownLink);
+        }
         statusBox.textContent = "Hoàn tất. Knowledge Pack đã sẵn sàng.";
       } catch (error) {
         statusBox.textContent = error.message;

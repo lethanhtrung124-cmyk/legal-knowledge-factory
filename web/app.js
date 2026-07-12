@@ -50,6 +50,17 @@ form.addEventListener("submit", async (event) => {
     link.className = "download";
     link.textContent = "Tải file .zip";
     downloadArea.appendChild(link);
+
+    const markdownUrl = response.headers.get("X-GPT-Knowledge-Url");
+    if (markdownUrl) {
+      const markdownLink = document.createElement("a");
+      markdownLink.href = markdownUrl.startsWith("http") ? markdownUrl : `${apiBaseUrl}${markdownUrl}`;
+      markdownLink.download = `${baseName}_gpt_knowledge.md`;
+      markdownLink.className = "download";
+      markdownLink.textContent = "Tải file GPT Markdown";
+      downloadArea.appendChild(markdownLink);
+    }
+
     statusBox.textContent = validationStatus
       ? `Hoàn tất. Validation: ${validationStatus}. Knowledge Pack đã sẵn sàng.`
       : "Hoàn tất. Knowledge Pack đã sẵn sàng.";
