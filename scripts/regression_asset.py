@@ -25,6 +25,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run Legal Knowledge Asset regression corpus")
     parser.add_argument("--corpus", required=True, help="Folder containing .docx/.pdf regression documents")
     parser.add_argument("--output", default="knowledge_packs", help="Output folder")
+    parser.add_argument("--extra-file", action="append", default=[], help="Additional .docx/.pdf document to include")
     args = parser.parse_args()
 
     corpus = Path(args.corpus)
@@ -34,6 +35,10 @@ def main() -> int:
         for path in sorted(corpus.iterdir())
         if path.is_file() and path.suffix.lower() in {".docx", ".pdf"} and any(pattern in path.name for pattern in DEFAULT_PATTERNS)
     ]
+    for extra in args.extra_file:
+        extra_path = Path(extra)
+        if extra_path.exists() and extra_path.suffix.lower() in {".docx", ".pdf"} and extra_path not in files:
+            files.append(extra_path)
     rows: list[dict[str, object]] = []
     for path in files:
         parsed = parse_document(path)

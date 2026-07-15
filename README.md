@@ -67,6 +67,7 @@ Các file bổ sung:
 ```text
 LEGAL_ASSET_{document_number}.json
 LEGAL_ASSET_{document_number}.md
+LEGAL_ASSET_{document_number}.docx
 MIGRATION_REPORT_{document_number}.md
 ASSET_VALIDATION_{document_number}.md
 REGRESSION_SUMMARY_{document_number}.md
@@ -97,6 +98,12 @@ Chạy regression cho bộ văn bản chuẩn:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\regression_asset.py --corpus "D:\3. Ca nhan\3. VB CNTT, CĐS" --output knowledge_packs
+```
+
+Nếu có văn bản nằm ngoài thư mục corpus, thêm `--extra-file`:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\regression_asset.py --corpus "D:\3. Ca nhan\3. VB CNTT, CĐS" --extra-file "C:\Users\admin\Downloads\671_QD-BTTTT_608693.docx" --output knowledge_packs
 ```
 
 Script tạo `LEGAL_ASSET_REGRESSION_SUMMARY.json` và trả mã lỗi nếu có asset `FAIL`.

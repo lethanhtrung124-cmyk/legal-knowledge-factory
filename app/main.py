@@ -45,6 +45,7 @@ app.add_middleware(
         "X-GPT-Knowledge-Url",
         "X-Legal-Asset-Json-Url",
         "X-Legal-Asset-Markdown-Url",
+        "X-Legal-Asset-Word-Url",
         "X-Legal-Asset-Migration-Url",
         "X-Legal-Asset-Validation-Url",
         "X-Legal-Asset-Regression-Url",
@@ -88,7 +89,12 @@ def download_legal_asset_file(file_name: str):
     asset_path = OUTPUT_DIR / "knowledge_packs" / safe_name
     if not asset_path.exists():
         raise HTTPException(status_code=404, detail="Không tìm thấy file Legal Asset.")
-    media_type = "application/json" if safe_name.endswith(".json") else "text/markdown; charset=utf-8"
+    if safe_name.endswith(".json"):
+        media_type = "application/json"
+    elif safe_name.endswith(".docx"):
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    else:
+        media_type = "text/markdown; charset=utf-8"
     return FileResponse(asset_path, media_type=media_type, filename=safe_name)
 
 
@@ -137,6 +143,7 @@ async def create_knowledge_pack(file: UploadFile = File(...)):
     response.headers["X-GPT-Knowledge-Url"] = f"/api/knowledge-markdown/{quote(gpt_markdown_name)}"
     response.headers["X-Legal-Asset-Json-Url"] = f"/api/legal-asset/{quote(asset_outputs['json'].name)}"
     response.headers["X-Legal-Asset-Markdown-Url"] = f"/api/legal-asset/{quote(asset_outputs['markdown'].name)}"
+    response.headers["X-Legal-Asset-Word-Url"] = f"/api/legal-asset/{quote(asset_outputs['word'].name)}"
     response.headers["X-Legal-Asset-Migration-Url"] = f"/api/legal-asset/{quote(asset_outputs['migration_report'].name)}"
     response.headers["X-Legal-Asset-Validation-Url"] = f"/api/legal-asset/{quote(asset_outputs['validation_report'].name)}"
     response.headers["X-Legal-Asset-Regression-Url"] = f"/api/legal-asset/{quote(asset_outputs['regression_summary'].name)}"
@@ -363,6 +370,7 @@ INDEX_HTML = """
         const assetLinks = [
           ["X-Legal-Asset-Json-Url", "Tải Legal Asset JSON", `${baseName}_legal_asset.json`],
           ["X-Legal-Asset-Markdown-Url", "Tải Legal Asset Markdown", `${baseName}_legal_asset.md`],
+          ["X-Legal-Asset-Word-Url", "Tải Legal Asset Word", `${baseName}_legal_asset.docx`],
           ["X-Legal-Asset-Migration-Url", "Tải Migration Report", `${baseName}_migration_report.md`],
           ["X-Legal-Asset-Validation-Url", "Tải Asset Validation", `${baseName}_asset_validation.md`],
           ["X-Legal-Asset-Regression-Url", "Tải Regression Summary", `${baseName}_regression_summary.md`],

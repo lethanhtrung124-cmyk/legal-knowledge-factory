@@ -485,7 +485,7 @@ def validate_asset(nodes: list[AssetNode], expected_issued: bool = False) -> Ass
     scoped_keys = [
         (node.parent_id, node.node_type, node.number, node.scope_type)
         for node in nodes
-        if node.number and node.node_type != "FORM"
+        if node.number and node.node_type not in {"FORM", "REFERENCE"}
     ]
     duplicates = duplicate_keys(scoped_keys)
     if duplicates:
@@ -557,7 +557,7 @@ def build_migration_report(parsed: ParsedDocument, nodes: list[AssetNode]) -> di
         "appendix_nodes": [node.id for node in nodes if node.node_type == "APPENDIX"],
         "appendix_to_reference_nodes": [node.id for node in nodes if node.node_type == "REFERENCE"],
         "legacy_checksum": checksum(parsed.raw_text),
-        "asset_checksum": checksum("\n".join(node.original_text for node in nodes if node.node_type in {"MAIN_DOCUMENT", "ISSUED_CONTENT"})),
+        "asset_checksum": checksum(next(node.original_text for node in nodes if node.node_type == "MAIN_DOCUMENT")),
         "review_nodes": [node.id for node in nodes if node.review_status == "NEEDS_REVIEW"],
     }
 
@@ -692,21 +692,68 @@ def write_legal_asset_outputs(asset: LegalKnowledgeAsset, output_root: Path) -> 
     safe = document_folder_name_from_asset(asset)
     json_path = output_root / f"LEGAL_ASSET_{safe}.json"
     md_path = output_root / f"LEGAL_ASSET_{safe}.md"
+    docx_path = output_root / f"LEGAL_ASSET_{safe}.docx"
     migration_path = output_root / f"MIGRATION_REPORT_{safe}.md"
     validation_path = output_root / f"ASSET_VALIDATION_{safe}.md"
     regression_path = output_root / f"REGRESSION_SUMMARY_{safe}.md"
     json_path.write_text(json.dumps(asset_to_dict(asset), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     md_path.write_text(render_asset_markdown(asset), encoding="utf-8")
+    write_asset_docx(asset, docx_path)
     migration_path.write_text(render_migration_report(asset), encoding="utf-8")
     validation_path.write_text(render_asset_validation_report(asset), encoding="utf-8")
     regression_path.write_text(render_regression_summary(asset), encoding="utf-8")
     return {
         "json": json_path,
         "markdown": md_path,
+        "word": docx_path,
         "migration_report": migration_path,
         "validation_report": validation_path,
         "regression_summary": regression_path,
     }
+
+
+def write_asset_docx(asset: LegalKnowledgeAsset, path: Path) -> None:
+    from docx import Document
+
+    document = Document()
+    document.add_heading(asset.title, level=1)
+    document.add_heading("SOURCE OF TRUTH", level=2)
+    document.add_paragraph(
+        "Nội dung gốc là nguồn ưu tiên cao nhất. Metadata, bảng tra cứu, tóm tắt, từ khóa và FAQ chỉ hỗ trợ định vị."
+    )
+    document.add_heading("Metadata", level=2)
+    document.add_paragraph(f"Loại văn bản: {asset.document_type}")
+    document.add_paragraph(f"Số/ký hiệu: {asset.document_number}")
+    document.add_paragraph(f"Root node: {asset.root_id}")
+    document.add_paragraph(f"Validation: {asset.validation['status']}")
+
+    nodes = asset.nodes
+    root = next(node for node in nodes if node.id == asset.root_id)
+    document.add_heading("Văn bản chính", level=2)
+    for provision in children(nodes, root.id, "PROVISION"):
+        document.add_heading(f"Điều {provision.number}", level=3)
+        document.add_paragraph(provision.original_text)
+
+    issued_contents = children(nodes, root.id, "ISSUED_CONTENT")
+    if issued_contents:
+        document.add_heading("Nội dung ban hành kèm theo", level=2)
+        for issued in issued_contents:
+            document.add_heading(issued.title, level=3)
+            for provision in children(nodes, issued.id, "PROVISION"):
+                kind = provision.metadata.get("provision_kind", "Điều")
+                document.add_heading(f"{kind} {provision.number}", level=4)
+                document.add_paragraph(provision.original_text)
+            appendices = [node for node in children(nodes, issued.id) if node.node_type in {"APPENDIX", "FORM"}]
+            if appendices:
+                document.add_heading("Phụ lục của nội dung ban hành kèm theo", level=2)
+                for appendix in appendices:
+                    label = "Biểu mẫu" if appendix.node_type == "FORM" else "Phụ lục"
+                    document.add_heading(f"{label} {appendix.canonical_number or appendix.number}", level=3)
+                    document.add_paragraph(appendix.original_text)
+
+    document.add_heading("Validation", level=2)
+    document.add_paragraph(json.dumps(asset.validation, ensure_ascii=False, indent=2))
+    document.save(path)
 
 
 def asset_to_dict(asset: LegalKnowledgeAsset) -> dict[str, object]:

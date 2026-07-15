@@ -88,6 +88,7 @@ def upload_docx(path: Path) -> tuple[bytes, dict[str, str]]:
         "gpt_markdown": response.getheader("X-GPT-Knowledge-Url") or "",
         "asset_json": response.getheader("X-Legal-Asset-Json-Url") or "",
         "asset_markdown": response.getheader("X-Legal-Asset-Markdown-Url") or "",
+        "asset_word": response.getheader("X-Legal-Asset-Word-Url") or "",
         "asset_validation": response.getheader("X-Legal-Asset-Validation-Url") or "",
     }
     return payload, headers
@@ -101,6 +102,16 @@ def download_text(path_url: str) -> str:
     if response.status != 200:
         raise RuntimeError(payload[:500].decode("utf-8", errors="replace"))
     return payload.decode("utf-8")
+
+
+def download_bytes(path_url: str) -> bytes:
+    connection = http.client.HTTPConnection(HOST, PORT, timeout=30)
+    connection.request("GET", path_url)
+    response = connection.getresponse()
+    payload = response.read()
+    if response.status != 200:
+        raise RuntimeError(payload[:500].decode("utf-8", errors="replace"))
+    return payload
 
 
 def main() -> None:
@@ -122,6 +133,7 @@ def main() -> None:
         raise RuntimeError(f"Missing Legal Asset JSON download URL: {urls['asset_json']}")
     asset_json = download_text(urls["asset_json"])
     asset_markdown = download_text(urls["asset_markdown"])
+    asset_word = download_bytes(urls["asset_word"])
     asset_validation = download_text(urls["asset_validation"])
     names = zipfile.ZipFile(BytesIO(payload)).namelist()
     archive = zipfile.ZipFile(BytesIO(payload))
@@ -179,6 +191,7 @@ def main() -> None:
         "merged_markdown_no_prompt": "System Prompt" not in markdown,
         "asset_json_schema": '"schema_version": "2.0"' in asset_json,
         "asset_markdown_truth": "## SOURCE OF TRUTH" in asset_markdown,
+        "asset_word_docx": asset_word.startswith(b"PK"),
         "asset_validation_report": "# Asset Validation" in asset_validation,
     }
     failed = [name for name, passed in checks.items() if not passed]

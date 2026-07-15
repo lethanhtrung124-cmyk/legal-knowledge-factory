@@ -64,6 +64,7 @@ form.addEventListener("submit", async (event) => {
     const assetLinks = [
       ["X-Legal-Asset-Json-Url", "Tải Legal Asset JSON", `${baseName}_legal_asset.json`],
       ["X-Legal-Asset-Markdown-Url", "Tải Legal Asset Markdown", `${baseName}_legal_asset.md`],
+      ["X-Legal-Asset-Word-Url", "Tải Legal Asset Word", `${baseName}_legal_asset.docx`],
       ["X-Legal-Asset-Migration-Url", "Tải Migration Report", `${baseName}_migration_report.md`],
       ["X-Legal-Asset-Validation-Url", "Tải Asset Validation", `${baseName}_asset_validation.md`],
       ["X-Legal-Asset-Regression-Url", "Tải Regression Summary", `${baseName}_regression_summary.md`],
