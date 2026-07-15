@@ -1,3 +1,5 @@
+import pytest
+
 from app.document_processor import Appendix, Article, ParsedDocument
 from app.legal_asset import (
     build_legal_knowledge_asset,
@@ -208,3 +210,16 @@ def test_structure_json_gates_asset_gpt_export_for_issued_content():
     assert [item["canonical_number"] for item in issued["appendices"]] == ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"]
     assert "## Nội dung ban hành kèm theo" in markdown
     assert "Phụ lục 01. Phụ lục" not in markdown
+
+
+def test_gpt_export_requires_asset_validation_pass():
+    raw_text = "Điều 1. Nội dung\n1. Nội dung kiểm thử."
+    parsed = make_parsed(raw_text, articles=[Article(number="1", title="Nội dung", raw_content=raw_text)])
+    asset = build_legal_knowledge_asset(parsed)
+    asset.validation = {"status": "WARNING", "errors": [], "warnings": [{"code": "TEST", "message": "review"}]}
+
+    validation = validate_structure_for_export(asset)
+
+    assert validation["status"] == "FAIL"
+    with pytest.raises(ValueError, match="Structure validation FAIL"):
+        render_gpt_knowledge_from_asset(asset)

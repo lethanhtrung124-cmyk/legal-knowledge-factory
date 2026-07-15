@@ -24,6 +24,11 @@ COMMON_KEYWORDS = {
     "dữ liệu",
     "tổ chức",
     "cá nhân",
+    "nội dung",
+    "thực hiện",
+    "yêu cầu",
+    "phương pháp",
+    "bảng",
 }
 
 
@@ -31,17 +36,34 @@ LEGAL_TERM_CATALOG: list[tuple[str, str, tuple[str, ...]]] = [
     ("legal", "phạm vi điều chỉnh", ("phạm vi điều chỉnh", "phạm vi áp dụng")),
     ("legal", "đối tượng áp dụng", ("đối tượng áp dụng", "áp dụng đối với")),
     ("legal", "giải thích từ ngữ", ("giải thích từ ngữ", "được hiểu là")),
-    ("legal", "căn cứ pháp lý", ("căn cứ", "theo đề nghị")),
+    ("legal", "căn cứ pháp lý", ("căn cứ luật", "căn cứ nghị định", "căn cứ thông tư", "theo đề nghị")),
     ("legal", "nguyên tắc kiến trúc", ("nguyên tắc kiến trúc", "nguyên tắc thiết kế")),
-    ("legal", "thẩm quyền quyết định", ("thẩm quyền", "quyết định", "phê duyệt")),
-    ("legal", "trách nhiệm tổ chức thực hiện", ("trách nhiệm", "tổ chức thực hiện", "chủ trì", "phối hợp")),
+    ("legal", "thẩm quyền quyết định", ("thẩm quyền quyết định", "thẩm quyền phê duyệt", "quyết định đầu tư", "quyết định phê duyệt")),
+    ("legal", "trách nhiệm tổ chức thực hiện", ("trách nhiệm tổ chức thực hiện", "tổ chức thực hiện", "chủ trì", "phối hợp")),
     ("legal", "quyền và nghĩa vụ", ("quyền", "nghĩa vụ")),
-    ("legal", "điều kiện thực hiện", ("điều kiện", "đáp ứng", "yêu cầu")),
+    ("legal", "điều kiện thực hiện", ("điều kiện thực hiện", "điều kiện bảo đảm", "đáp ứng điều kiện")),
     ("legal", "xử lý vi phạm", ("vi phạm", "xử lý vi phạm", "xử phạt")),
     ("legal", "hiệu lực thi hành", ("hiệu lực thi hành", "kể từ ngày")),
     ("legal", "quy định chuyển tiếp", ("chuyển tiếp", "tiếp tục thực hiện")),
+    ("legal", "nguyên tắc tính đúng, tính đủ", ("tính đúng, tính đủ", "không trùng lặp")),
+    ("legal", "pháp luật chuyên ngành", ("pháp luật chuyên ngành", "quy định của pháp luật chuyên ngành")),
+    ("legal", "quản lý chi phí đầu tư ứng dụng công nghệ thông tin", ("quản lý chi phí đầu tư ứng dụng công nghệ thông tin", "lập và quản lý chi phí đầu tư")),
     ("business", "hồ sơ", ("hồ sơ", "thành phần hồ sơ", "tài liệu")),
     ("business", "trình tự thủ tục", ("trình tự", "thủ tục", "thời hạn", "tiếp nhận", "giải quyết")),
+    ("business", "chi phí phần mềm nội bộ", ("chi phí phần mềm nội bộ", "chi phí trực tiếp xây dựng, phát triển, nâng cấp, mở rộng phần mềm nội bộ")),
+    ("business", "xác định chi phí phần mềm nội bộ", ("xác định chi phí phần mềm nội bộ", "xác định chi phí trực tiếp xây dựng")),
+    ("business", "hồ sơ xác định chi phí phần mềm nội bộ", ("hồ sơ phục vụ xác định chi phí phần mềm nội bộ", "hồ sơ xác định chi phí phần mềm nội bộ")),
+    ("business", "trình tự xác định chi phí phần mềm nội bộ", ("trình tự xác định chi phí phần mềm nội bộ", "theo các bước, công việc chính")),
+    ("business", "phương pháp tính chi phí phần mềm nội bộ", ("phương pháp tính chi phí phần mềm nội bộ", "nội suy", "mức lương lao động bình quân")),
+    ("business", "bảng chi phí trực tiếp", ("bảng chi phí trực tiếp", "chi phí chung", "thu nhập chịu thuế tính trước")),
+    ("business", "tác nhân", ("tác nhân", "actor", "actors")),
+    ("business", "trường hợp sử dụng", ("trường hợp sử dụng", "use case")),
+    ("business", "giao dịch", ("giao dịch", "transaction")),
+    ("business", "yêu cầu chức năng", ("yêu cầu chức năng", "danh sách các yêu cầu chức năng")),
+    ("business", "yêu cầu phi chức năng", ("yêu cầu phi chức năng", "độ phức tạp kỹ thuật - công nghệ")),
+    ("business", "hệ số phức tạp kỹ thuật - công nghệ", ("hệ số phức tạp kỹ thuật - công nghệ", "tcf")),
+    ("business", "hệ số tác động môi trường", ("hệ số tác động môi trường", "nhóm làm việc", "ef")),
+    ("business", "kiểm thử phần mềm nội bộ", ("kiểm thử phần mềm nội bộ", "chi phí kiểm thử")),
     ("business", "dịch vụ công trực tuyến", ("dịch vụ công trực tuyến", "dịch vụ công")),
     ("business", "dịch vụ công trực tuyến chủ động", ("dịch vụ công trực tuyến chủ động",)),
     ("business", "cung cấp thông tin trên môi trường số", ("cung cấp thông tin", "môi trường số")),
@@ -51,6 +73,8 @@ LEGAL_TERM_CATALOG: list[tuple[str, str, tuple[str, ...]]] = [
     ("business", "kinh tế số", ("kinh tế số",)),
     ("business", "xã hội số", ("xã hội số",)),
     ("technology", "hệ thống số", ("hệ thống số",)),
+    ("technology", "phần mềm nội bộ", ("phần mềm nội bộ",)),
+    ("technology", "cơ sở dữ liệu", ("cơ sở dữ liệu", "tạo lập cơ sở dữ liệu")),
     ("technology", "thiết kế hệ thống số", ("thiết kế hệ thống số",)),
     ("technology", "kiến trúc hệ thống số", ("kiến trúc hệ thống số",)),
     ("technology", "kiến trúc nền tảng số", ("kiến trúc nền tảng số", "nền tảng số")),
@@ -90,7 +114,16 @@ TOPIC_RULES: list[tuple[str, tuple[str, ...]]] = [
     ("Trách nhiệm tổ chức thực hiện", ("trách nhiệm", "tổ chức thực hiện", "chủ trì", "phối hợp")),
     ("Hiệu lực thi hành", ("hiệu lực thi hành", "kể từ ngày")),
     ("Quy định chuyển tiếp", ("chuyển tiếp",)),
+    ("Xác định chi phí phần mềm nội bộ", ("xác định chi phí phần mềm nội bộ", "chi phí phần mềm nội bộ")),
+    ("Hồ sơ xác định chi phí phần mềm nội bộ", ("hồ sơ phục vụ xác định chi phí phần mềm nội bộ", "hồ sơ xác định chi phí")),
+    ("Trình tự xác định chi phí phần mềm nội bộ", ("trình tự xác định chi phí phần mềm nội bộ", "theo các bước, công việc chính")),
+    ("Phương pháp tính chi phí phần mềm nội bộ", ("phương pháp tính chi phí phần mềm nội bộ", "nội suy", "mức lương lao động bình quân")),
+    ("Tác nhân, trường hợp sử dụng và giao dịch", ("tác nhân", "trường hợp sử dụng", "giao dịch", "actor", "use case", "transaction")),
+    ("Hệ số kỹ thuật và môi trường", ("hệ số phức tạp kỹ thuật", "hệ số tác động môi trường", "nhóm làm việc")),
+    ("Bảng tính chi phí phần mềm", ("bảng chi phí trực tiếp", "chi phí chung", "thu nhập chịu thuế tính trước")),
 ]
+
+GENERIC_TOPIC_FALLBACKS = {"Nội dung chuyên ngành", "Quy định chung"}
 
 GENERAL_PROVISION_TITLE_MARKERS = (
     "phạm vi điều chỉnh",
@@ -148,7 +181,7 @@ class ArticleKnowledge:
 
     @property
     def all_keywords(self) -> list[str]:
-        return unique(
+        return prune_keywords(
             self.legal_keywords
             + self.business_keywords
             + self.technology_keywords
@@ -813,9 +846,46 @@ def extract_keyword_groups(text: str) -> dict[str, list[str]]:
     for group, term, markers in LEGAL_TERM_CATALOG:
         if any(marker.lower() in lowered for marker in markers):
             groups[group].append(term)
+    for phrase in extract_domain_phrases(text):
+        target = "business" if any(marker in phrase for marker in ("chi phí", "hồ sơ", "trình tự", "hệ số", "bảng")) else "technology"
+        groups[target].append(phrase)
     for key in groups:
-        groups[key] = [term for term in unique(groups[key]) if term not in COMMON_KEYWORDS]
+        groups[key] = prune_keywords([term for term in unique(groups[key]) if term not in COMMON_KEYWORDS])
     return groups
+
+
+def extract_domain_phrases(text: str) -> list[str]:
+    lowered = text.lower()
+    patterns = (
+        r"(chi phí phần mềm nội bộ)",
+        r"(hồ sơ (?:phục vụ )?xác định chi phí phần mềm nội bộ)",
+        r"(trình tự xác định chi phí phần mềm nội bộ)",
+        r"(phương pháp tính chi phí phần mềm nội bộ)",
+        r"(bảng [^.\n;:]{0,80}?(?:phần mềm nội bộ|tác nhân|trường hợp sử dụng|chi phí trực tiếp))",
+        r"(hệ số [^.\n;:]{0,80}?(?:kỹ thuật|môi trường|nhóm làm việc))",
+        r"(trường hợp sử dụng)",
+        r"(yêu cầu (?:chức năng|phi chức năng))",
+        r"(mức lương lao động bình quân)",
+    )
+    phrases: list[str] = []
+    for pattern in patterns:
+        phrases.extend(match.group(1).strip(" .;:") for match in re.finditer(pattern, lowered))
+    return unique([phrase for phrase in phrases if 6 <= len(phrase) <= 120])
+
+
+def prune_keywords(keywords: list[str]) -> list[str]:
+    normalized_keywords = unique([normalize_keyword(keyword) for keyword in keywords if normalize_keyword(keyword)])
+    ordered = sorted(normalized_keywords, key=lambda item: (-len(item), item))
+    selected: list[str] = []
+    for keyword in ordered:
+        if any(keyword != other and keyword in other for other in selected):
+            continue
+        selected.append(keyword)
+    return sorted(selected)
+
+
+def normalize_keyword(keyword: str) -> str:
+    return re.sub(r"\s+", " ", keyword.replace("\xa0", " ")).strip(" .;:,").lower()
 
 
 def infer_topics(article: Article) -> list[str]:
@@ -838,7 +908,11 @@ def infer_topics(article: Article) -> list[str]:
     if not scored:
         return ["Quy định chung"] if article.number in {"1", "2"} else ["Nội dung chuyên ngành"]
     ranked = sorted(scored.items(), key=lambda item: (-item[1], item[0]))
-    return [topic for topic, _ in ranked[:4]]
+    topics = [topic for topic, _ in ranked[:5]]
+    specific_topics = [topic for topic in topics if topic not in GENERIC_TOPIC_FALLBACKS]
+    if specific_topics:
+        topics = specific_topics
+    return topics[:4]
 
 
 def direct_topic_contexts(text: str) -> list[str]:

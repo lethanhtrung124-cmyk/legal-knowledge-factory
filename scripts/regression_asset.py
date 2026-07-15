@@ -43,7 +43,16 @@ def main() -> int:
     for path in files:
         parsed = parse_document(path)
         asset = build_legal_knowledge_asset(parsed)
-        outputs = write_legal_asset_outputs(asset, output)
+        export_error = ""
+        try:
+            outputs = write_legal_asset_outputs(asset, output)
+        except ValueError as exc:
+            export_error = str(exc)
+            safe = (asset.document_number or path.stem).replace("/", "_").replace(".", "_")
+            outputs = {
+                "json": output / f"LEGAL_ASSET_{safe}.json",
+                "markdown": output / f"LEGAL_ASSET_{safe}.md",
+            }
         zip_path = build_knowledge_pack(parsed, output, emit_gpt_markdown=False)
         rows.append(
             {
@@ -55,12 +64,11 @@ def main() -> int:
                 "stats": asset.stats,
                 "error_codes": [item["code"] for item in asset.validation["errors"]],
                 "warning_codes": [item["code"] for item in asset.validation["warnings"]],
+                "export_error": export_error,
             }
         )
 
-    status = "FAIL" if any(row["validation_status"] == "FAIL" for row in rows) else "WARNING" if any(
-        row["validation_status"] == "WARNING" for row in rows
-    ) else "PASS"
+    status = "FAIL" if any(row["validation_status"] != "PASS" or row["export_error"] for row in rows) else "PASS"
     output.mkdir(parents=True, exist_ok=True)
     summary_path = output / "LEGAL_ASSET_REGRESSION_SUMMARY.json"
     summary_path.write_text(

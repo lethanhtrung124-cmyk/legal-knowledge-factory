@@ -1,5 +1,5 @@
 from app.document_processor import Article
-from app.knowledge_pack import infer_topics
+from app.knowledge_pack import extract_keyword_groups, infer_topics
 
 
 def test_scope_article_does_not_get_indirect_topics_from_listed_scope():
@@ -37,3 +37,28 @@ def test_topics_use_direct_article_content_not_related_law_mentions():
     assert "Thiết kế hệ thống số" in topics
     assert "Dữ liệu và chia sẻ dữ liệu" in topics
     assert "An ninh mạng, bảo vệ dữ liệu cá nhân" in topics
+
+
+def test_topics_and_keywords_prefer_specific_legal_business_meaning():
+    article = Article(
+        number="7",
+        title="Phương pháp xác định chi phí phần mềm nội bộ",
+        raw_content=(
+            "Điều 7. Phương pháp xác định chi phí phần mềm nội bộ\n"
+            "Chi phí phần mềm nội bộ được xác định theo phương pháp tính chi phí phần mềm nội bộ.\n"
+            "Chủ đầu tư lập bảng chi phí trực tiếp xây dựng, phát triển, nâng cấp, mở rộng phần mềm nội bộ; "
+            "xác định tác nhân, trường hợp sử dụng, giao dịch, hệ số phức tạp kỹ thuật - công nghệ, "
+            "hệ số tác động môi trường và mức lương lao động bình quân."
+        ),
+    )
+
+    topics = infer_topics(article)
+    keywords = extract_keyword_groups(article.raw_content)
+
+    assert "Phương pháp tính chi phí phần mềm nội bộ" in topics
+    assert "Tác nhân, trường hợp sử dụng và giao dịch" in topics
+    assert "Hệ số kỹ thuật và môi trường" in topics
+    assert "phương pháp tính chi phí phần mềm nội bộ" in keywords["business"]
+    assert "hệ số phức tạp kỹ thuật - công nghệ" in keywords["business"]
+    assert "chi phí phần mềm nội bộ" not in keywords["business"]
+    assert "phương pháp" not in keywords["business"]

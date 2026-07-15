@@ -28,6 +28,7 @@ from .knowledge_pack import (
     embed_markdown_section,
     extract_keyword_groups,
     infer_topics,
+    prune_keywords,
     quality_checked_faqs,
     render_keyword_index,
     render_lookup,
@@ -48,7 +49,7 @@ ATTACHED_CONFIRMATION_RE = re.compile(r"ban\s+hành\s+kèm\s+theo\s+.+\s+số", 
 REFERENCE_RE = re.compile(r"\b(Phụ\s+lục|Mẫu\s+số|Biểu\s+mẫu)\s+([IVXLCDM]+|\d+[A-Za-z0-9./-]*)\b", re.IGNORECASE)
 PARSER_VERSION = "legal-asset-parser/2.1.0"
 ASSET_SCHEMA_VERSION = "2.0"
-EXPORTER_VERSION = "legal-asset-exporter/2.1.0"
+EXPORTER_VERSION = "legal-asset-exporter/2.2.0"
 
 
 @dataclass
@@ -516,7 +517,8 @@ def validate_asset(nodes: list[AssetNode], expected_issued: bool = False) -> Ass
     main_numbers = {node.number for node in nodes if node.node_type == "PROVISION" and node.scope_type == "MAIN_DOCUMENT"}
     issued_numbers = {node.number for node in nodes if node.node_type == "PROVISION" and node.scope_type == "ISSUED_CONTENT"}
     if main_numbers.intersection(issued_numbers):
-        warnings.append(error("KB-ISS-003", "Có Điều cùng số ở MAIN_DOCUMENT và ISSUED_CONTENT; được chấp nhận vì khác parent."))
+        # Same article numbers are valid across different parents/scopes and must not block PASS.
+        pass
 
     status = "FAIL" if errors else "WARNING" if warnings else "PASS"
     return AssetValidation(status=status, errors=errors, warnings=warnings)
@@ -687,8 +689,8 @@ def validate_structure_for_export(asset: LegalKnowledgeAsset) -> dict[str, objec
     errors: list[str] = []
     warnings: list[str] = []
     structure = build_structure(asset)
-    if asset.validation["status"] == "FAIL":
-        errors.append("Legal Knowledge Asset validation is FAIL.")
+    if asset.validation["status"] != "PASS":
+        errors.append(f"Legal Knowledge Asset validation must be PASS before export, got {asset.validation['status']}.")
     if asset.stats["issued_content_count"] > 0:
         issued_items = structure["tree"]["issued_content"]  # type: ignore[index]
         if not issued_items:
@@ -741,7 +743,7 @@ def render_asset_lookup(nodes: list[AssetNode]) -> str:
         if node.node_type == "PROVISION":
             article = node_to_article(node)
             topics = infer_topics(article)
-            keywords = sum(extract_keyword_groups(node.original_text).values(), [])
+            keywords = prune_keywords(sum(extract_keyword_groups(node.original_text).values(), []))
         lines.append(
             f"| {node.scope_type} | {node.parent_id} | {node.id} | {node.number} | {node.title} | "
             f"{', '.join(topics)} | {', '.join(keywords)} |"
@@ -814,15 +816,15 @@ def write_legal_asset_outputs(asset: LegalKnowledgeAsset, output_root: Path) -> 
     structure_validation = validate_structure_for_export(asset)
     structure["structure_validation"] = structure_validation
     structure_path.write_text(json.dumps(structure, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    migration_path.write_text(render_migration_report(asset), encoding="utf-8")
+    validation_path.write_text(render_asset_validation_report(asset), encoding="utf-8")
+    regression_path.write_text(render_regression_summary(asset), encoding="utf-8")
+    runtime_log_path.write_text(render_runtime_log(asset, structure_validation), encoding="utf-8")
     if structure_validation["status"] == "FAIL":
         raise ValueError("Structure validation FAIL: " + "; ".join(structure_validation["errors"]))
     md_path.write_text(render_asset_markdown(asset), encoding="utf-8")
     gpt_path.write_text(render_gpt_knowledge_from_asset(asset), encoding="utf-8")
     write_asset_docx(asset, docx_path)
-    migration_path.write_text(render_migration_report(asset), encoding="utf-8")
-    validation_path.write_text(render_asset_validation_report(asset), encoding="utf-8")
-    regression_path.write_text(render_regression_summary(asset), encoding="utf-8")
-    runtime_log_path.write_text(render_runtime_log(asset, structure_validation), encoding="utf-8")
     return {
         "json": json_path,
         "structure": structure_path,
