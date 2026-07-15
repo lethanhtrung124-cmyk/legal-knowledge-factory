@@ -46,6 +46,9 @@ ISSUED_SIGNAL_RE = re.compile(
 )
 ATTACHED_CONFIRMATION_RE = re.compile(r"ban\s+hành\s+kèm\s+theo\s+.+\s+số", re.IGNORECASE)
 REFERENCE_RE = re.compile(r"\b(Phụ\s+lục|Mẫu\s+số|Biểu\s+mẫu)\s+([IVXLCDM]+|\d+[A-Za-z0-9./-]*)\b", re.IGNORECASE)
+PARSER_VERSION = "legal-asset-parser/2.1.0"
+ASSET_SCHEMA_VERSION = "2.0"
+EXPORTER_VERSION = "legal-asset-exporter/2.1.0"
 
 
 @dataclass
@@ -167,7 +170,7 @@ def build_legal_knowledge_asset(parsed: ParsedDocument) -> LegalKnowledgeAsset:
 
     validation = validate_asset(nodes, expected_issued=issued_start is not None)
     return LegalKnowledgeAsset(
-        schema_version="2.0",
+        schema_version=ASSET_SCHEMA_VERSION,
         document_number=parsed.document_number,
         document_type=parsed.document_type,
         title=parsed.title,
@@ -618,6 +621,113 @@ def render_asset_markdown(asset: LegalKnowledgeAsset) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+def render_gpt_knowledge_from_asset(asset: LegalKnowledgeAsset) -> str:
+    validation = validate_structure_for_export(asset)
+    if validation["status"] == "FAIL":
+        raise ValueError("Structure validation FAIL: " + "; ".join(validation["errors"]))
+    return render_asset_markdown(asset)
+
+
+def build_structure(asset: LegalKnowledgeAsset) -> dict[str, object]:
+    nodes = asset.nodes
+    root = next(node for node in nodes if node.id == asset.root_id)
+    issued_contents = children(nodes, root.id, "ISSUED_CONTENT")
+    return {
+        "schema_version": asset.schema_version,
+        "parser_version": PARSER_VERSION,
+        "exporter_version": EXPORTER_VERSION,
+        "asset_id": asset.root_id,
+        "document_number": asset.document_number,
+        "document_type": asset.document_type,
+        "title": asset.title,
+        "stats": asset.stats,
+        "validation": asset.validation,
+        "tree": {
+            "node_id": root.id,
+            "node_type": root.node_type,
+            "title": root.title,
+            "provisions": structure_children(nodes, root.id, "PROVISION"),
+            "issued_content": [
+                {
+                    "node_id": issued.id,
+                    "node_type": issued.node_type,
+                    "title": issued.title,
+                    "provisions": structure_children(nodes, issued.id, "PROVISION"),
+                    "appendices": structure_children(nodes, issued.id, "APPENDIX"),
+                    "forms": structure_children(nodes, issued.id, "FORM"),
+                    "references": structure_children(nodes, issued.id, "REFERENCE"),
+                }
+                for issued in issued_contents
+            ],
+            "appendices": structure_children(nodes, root.id, "APPENDIX"),
+            "forms": structure_children(nodes, root.id, "FORM"),
+            "references": structure_children(nodes, root.id, "REFERENCE"),
+        },
+    }
+
+
+def structure_children(nodes: list[AssetNode], parent_id: str, node_type: str) -> list[dict[str, object]]:
+    return [
+        {
+            "node_id": node.id,
+            "node_type": node.node_type,
+            "number": node.number,
+            "canonical_number": node.canonical_number,
+            "title": node.title,
+            "parent_id": node.parent_id,
+            "order": node.order,
+            "checksum": node.checksum,
+            "review_status": node.review_status,
+        }
+        for node in children(nodes, parent_id, node_type)
+    ]
+
+
+def validate_structure_for_export(asset: LegalKnowledgeAsset) -> dict[str, object]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    structure = build_structure(asset)
+    if asset.validation["status"] == "FAIL":
+        errors.append("Legal Knowledge Asset validation is FAIL.")
+    if asset.stats["issued_content_count"] > 0:
+        issued_items = structure["tree"]["issued_content"]  # type: ignore[index]
+        if not issued_items:
+            errors.append("Missing ISSUED_CONTENT in structure.json.")
+        for issued in issued_items:  # type: ignore[union-attr]
+            provision_numbers = [item["number"] for item in issued["provisions"]]
+            if not provision_numbers:
+                errors.append(f"ISSUED_CONTENT {issued['node_id']} has no provisions.")
+            appendix_numbers = [item["canonical_number"] for item in issued["appendices"]]
+            duplicate_appendices = duplicate_values([number for number in appendix_numbers if number])
+            if duplicate_appendices:
+                errors.append(f"Duplicate APPENDIX in ISSUED_CONTENT {issued['node_id']}: {', '.join(duplicate_appendices)}.")
+            if "VIII" in appendix_numbers:
+                expected = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"]
+                missing = [number for number in expected if number not in appendix_numbers]
+                if missing:
+                    errors.append(f"Missing appendix sequence before VIII: {', '.join(missing)}.")
+            if provision_numbers[:7] == ["1", "2", "3", "4", "5", "6", "7"]:
+                pass
+            elif len(provision_numbers) >= 7:
+                warnings.append(f"ISSUED_CONTENT {issued['node_id']} provision sequence is not Điều 1-7.")
+    markdown_smell = "Phụ lục 01. Phụ lục"
+    for node in asset.nodes:
+        if markdown_smell in node.original_text:
+            errors.append("Forbidden false appendix label appears in source node.")
+    status = "FAIL" if errors else "WARNING" if warnings else "PASS"
+    return {"status": status, "errors": errors, "warnings": warnings}
+
+
+def duplicate_values(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for value in values:
+        if value in seen and value not in duplicates:
+            duplicates.append(value)
+        seen.add(value)
+    return duplicates
+
+
 def render_asset_lookup(nodes: list[AssetNode]) -> str:
     lines = [
         "| scope_type | parent_id | node_id | number | title | topic | keywords |",
@@ -691,25 +801,61 @@ def write_legal_asset_outputs(asset: LegalKnowledgeAsset, output_root: Path) -> 
     output_root.mkdir(parents=True, exist_ok=True)
     safe = document_folder_name_from_asset(asset)
     json_path = output_root / f"LEGAL_ASSET_{safe}.json"
+    structure_path = output_root / f"STRUCTURE_{safe}.json"
     md_path = output_root / f"LEGAL_ASSET_{safe}.md"
+    gpt_path = output_root / f"GPT_KNOWLEDGE_{safe}.md"
     docx_path = output_root / f"LEGAL_ASSET_{safe}.docx"
     migration_path = output_root / f"MIGRATION_REPORT_{safe}.md"
     validation_path = output_root / f"ASSET_VALIDATION_{safe}.md"
     regression_path = output_root / f"REGRESSION_SUMMARY_{safe}.md"
+    runtime_log_path = output_root / f"RUNTIME_LOG_{safe}.log"
     json_path.write_text(json.dumps(asset_to_dict(asset), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    structure = build_structure(asset)
+    structure_validation = validate_structure_for_export(asset)
+    structure["structure_validation"] = structure_validation
+    structure_path.write_text(json.dumps(structure, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if structure_validation["status"] == "FAIL":
+        raise ValueError("Structure validation FAIL: " + "; ".join(structure_validation["errors"]))
     md_path.write_text(render_asset_markdown(asset), encoding="utf-8")
+    gpt_path.write_text(render_gpt_knowledge_from_asset(asset), encoding="utf-8")
     write_asset_docx(asset, docx_path)
     migration_path.write_text(render_migration_report(asset), encoding="utf-8")
     validation_path.write_text(render_asset_validation_report(asset), encoding="utf-8")
     regression_path.write_text(render_regression_summary(asset), encoding="utf-8")
+    runtime_log_path.write_text(render_runtime_log(asset, structure_validation), encoding="utf-8")
     return {
         "json": json_path,
+        "structure": structure_path,
         "markdown": md_path,
+        "gpt_markdown": gpt_path,
         "word": docx_path,
         "migration_report": migration_path,
         "validation_report": validation_path,
         "regression_summary": regression_path,
+        "runtime_log": runtime_log_path,
     }
+
+
+def render_runtime_log(asset: LegalKnowledgeAsset, structure_validation: dict[str, object]) -> str:
+    return "\n".join(
+        [
+            f"parser_version={PARSER_VERSION}",
+            f"schema_version={asset.schema_version}",
+            f"exporter_version={EXPORTER_VERSION}",
+            f"asset_id={asset.root_id}",
+            f"issued_content={'yes' if asset.stats['issued_content_count'] else 'no'}",
+            f"main_document_article_count={asset.stats['main_document_article_count']}",
+            f"issued_content_count={asset.stats['issued_content_count']}",
+            f"issued_content_provision_count={asset.stats['issued_content_provision_count']}",
+            f"appendix_count={asset.stats['appendix_count']}",
+            f"reference_count={asset.stats['reference_count']}",
+            f"asset_validation_status={asset.validation['status']}",
+            f"structure_validation_status={structure_validation['status']}",
+            f"pipeline=LegalKnowledgeAsset",
+            f"gpt_exporter=LegalKnowledgeAsset",
+            "",
+        ]
+    )
 
 
 def write_asset_docx(asset: LegalKnowledgeAsset, path: Path) -> None:

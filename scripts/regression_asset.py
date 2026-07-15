@@ -42,9 +42,9 @@ def main() -> int:
     rows: list[dict[str, object]] = []
     for path in files:
         parsed = parse_document(path)
-        zip_path = build_knowledge_pack(parsed, output)
         asset = build_legal_knowledge_asset(parsed)
         outputs = write_legal_asset_outputs(asset, output)
+        zip_path = build_knowledge_pack(parsed, output, emit_gpt_markdown=False)
         rows.append(
             {
                 "source_file": str(path),

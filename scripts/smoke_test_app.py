@@ -87,9 +87,11 @@ def upload_docx(path: Path) -> tuple[bytes, dict[str, str]]:
     headers = {
         "gpt_markdown": response.getheader("X-GPT-Knowledge-Url") or "",
         "asset_json": response.getheader("X-Legal-Asset-Json-Url") or "",
+        "asset_structure": response.getheader("X-Legal-Asset-Structure-Url") or "",
         "asset_markdown": response.getheader("X-Legal-Asset-Markdown-Url") or "",
         "asset_word": response.getheader("X-Legal-Asset-Word-Url") or "",
         "asset_validation": response.getheader("X-Legal-Asset-Validation-Url") or "",
+        "asset_runtime_log": response.getheader("X-Legal-Asset-Runtime-Log-Url") or "",
     }
     return payload, headers
 
@@ -132,9 +134,11 @@ def main() -> None:
     if not urls["asset_json"].startswith("/api/legal-asset/LEGAL_ASSET_"):
         raise RuntimeError(f"Missing Legal Asset JSON download URL: {urls['asset_json']}")
     asset_json = download_text(urls["asset_json"])
+    asset_structure = download_text(urls["asset_structure"])
     asset_markdown = download_text(urls["asset_markdown"])
     asset_word = download_bytes(urls["asset_word"])
     asset_validation = download_text(urls["asset_validation"])
+    asset_runtime_log = download_text(urls["asset_runtime_log"])
     names = zipfile.ZipFile(BytesIO(payload)).namelist()
     archive = zipfile.ZipFile(BytesIO(payload))
     required = {
@@ -190,9 +194,11 @@ def main() -> None:
         "merged_markdown_original": "Điều 92. Nội dung nghiệp vụ 92" in markdown,
         "merged_markdown_no_prompt": "System Prompt" not in markdown,
         "asset_json_schema": '"schema_version": "2.0"' in asset_json,
+        "asset_structure": '"asset_id"' in asset_structure and '"tree"' in asset_structure,
         "asset_markdown_truth": "## SOURCE OF TRUTH" in asset_markdown,
         "asset_word_docx": asset_word.startswith(b"PK"),
         "asset_validation_report": "# Asset Validation" in asset_validation,
+        "asset_runtime_log": "pipeline=LegalKnowledgeAsset" in asset_runtime_log,
     }
     failed = [name for name, passed in checks.items() if not passed]
     if failed:

@@ -173,7 +173,7 @@ class MergedMarkdownValidationResult:
     errors: list[str]
 
 
-def build_knowledge_pack(parsed: ParsedDocument, output_root: Path | None = None) -> Path:
+def build_knowledge_pack(parsed: ParsedDocument, output_root: Path | None = None, emit_gpt_markdown: bool = True) -> Path:
     output_root = output_root or OUTPUT_DIR / "knowledge_packs"
     safe_number = document_folder_name(parsed)
     pack_dir = output_root / safe_number
@@ -213,14 +213,15 @@ def build_knowledge_pack(parsed: ParsedDocument, output_root: Path | None = None
     write_json(indexes_dir / "citation_index.json", build_citation_index(article_knowledge))
 
     zip_path = shutil.make_archive(str(pack_dir), "zip", root_dir=pack_dir)
-    merged_markdown = render_gpt_knowledge_markdown(parsed, article_knowledge)
-    merged_validation = validate_merged_markdown(parsed, article_knowledge, merged_markdown)
-    if merged_validation.status == "FAIL":
-        logger.error("Merged Markdown validation failed: %s", "; ".join(merged_validation.errors))
-        raise ValueError("Merged Markdown validation FAIL: " + "; ".join(merged_validation.errors))
-    if merged_validation.warnings:
-        logger.warning("Merged Markdown validation warnings: %s", "; ".join(merged_validation.warnings))
-    write_text(output_root / gpt_knowledge_file_name(parsed), merged_markdown)
+    if emit_gpt_markdown:
+        merged_markdown = render_gpt_knowledge_markdown(parsed, article_knowledge)
+        merged_validation = validate_merged_markdown(parsed, article_knowledge, merged_markdown)
+        if merged_validation.status == "FAIL":
+            logger.error("Merged Markdown validation failed: %s", "; ".join(merged_validation.errors))
+            raise ValueError("Merged Markdown validation FAIL: " + "; ".join(merged_validation.errors))
+        if merged_validation.warnings:
+            logger.warning("Merged Markdown validation warnings: %s", "; ".join(merged_validation.warnings))
+        write_text(output_root / gpt_knowledge_file_name(parsed), merged_markdown)
     logger.info("Knowledge Pack created: %s", zip_path)
     return Path(zip_path)
 

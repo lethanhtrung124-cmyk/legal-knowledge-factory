@@ -63,11 +63,13 @@ form.addEventListener("submit", async (event) => {
 
     const assetLinks = [
       ["X-Legal-Asset-Json-Url", "Tải Legal Asset JSON", `${baseName}_legal_asset.json`],
+      ["X-Legal-Asset-Structure-Url", "Tải structure.json", `${baseName}_structure.json`],
       ["X-Legal-Asset-Markdown-Url", "Tải Legal Asset Markdown", `${baseName}_legal_asset.md`],
       ["X-Legal-Asset-Word-Url", "Tải Legal Asset Word", `${baseName}_legal_asset.docx`],
       ["X-Legal-Asset-Migration-Url", "Tải Migration Report", `${baseName}_migration_report.md`],
       ["X-Legal-Asset-Validation-Url", "Tải Asset Validation", `${baseName}_asset_validation.md`],
       ["X-Legal-Asset-Regression-Url", "Tải Regression Summary", `${baseName}_regression_summary.md`],
+      ["X-Legal-Asset-Runtime-Log-Url", "Tải Runtime Log", `${baseName}_runtime.log`],
     ];
     for (const [header, label, downloadName] of assetLinks) {
       const assetUrl = response.headers.get(header);

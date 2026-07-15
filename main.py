@@ -21,13 +21,16 @@ def main() -> int:
         return 2
 
     parsed = parse_document(input_path)
-    zip_path = build_knowledge_pack(parsed, output_root=output_root)
-    print(zip_path)
     if args.asset:
         asset = build_legal_knowledge_asset(parsed)
         outputs = write_legal_asset_outputs(asset, output_root)
+        zip_path = build_knowledge_pack(parsed, output_root=output_root, emit_gpt_markdown=False)
+        print(zip_path)
         for path in outputs.values():
             print(path)
+    else:
+        zip_path = build_knowledge_pack(parsed, output_root=output_root)
+        print(zip_path)
     return 0
 
 

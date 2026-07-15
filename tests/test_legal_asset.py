@@ -1,10 +1,13 @@
 from app.document_processor import Appendix, Article, ParsedDocument
 from app.legal_asset import (
     build_legal_knowledge_asset,
+    build_structure,
     checksum,
     detect_issued_content_start,
     render_asset_markdown,
+    render_gpt_knowledge_from_asset,
     validate_asset,
+    validate_structure_for_export,
 )
 
 
@@ -153,3 +156,55 @@ def test_migration_report_preserves_legacy_checksum():
 
     assert asset.migration_report["legacy_checksum"] == checksum(raw_text)
     assert asset.validation["status"] in {"PASS", "WARNING"}
+
+
+def test_structure_json_gates_asset_gpt_export_for_issued_content():
+    raw_text = "\n".join(
+        [
+            "Điều 1. Ban hành kèm theo Quyết định này Hướng dẫn kiểm thử.",
+            "Điều 2. Hiệu lực thi hành",
+            "Điều 3. Tổ chức thực hiện",
+            "KT. BỘ TRƯỞNG",
+            "HƯỚNG DẪN KIỂM THỬ",
+            "(Ban hành kèm theo Quyết định số 671/QĐ-BTTTT)",
+            "Điều 1. Nội dung 1",
+            "Điều 2. Nội dung 2",
+            "Điều 3. Nội dung 3",
+            "Điều 4. Nội dung 4",
+            "Điều 5. Nội dung 5",
+            "Điều 6. Nội dung 6",
+            "Điều 7. Nội dung 7",
+            "PHỤ LỤC I",
+            "Nội dung phụ lục I",
+            "PHỤ LỤC II",
+            "Nội dung phụ lục II",
+            "PHỤ LỤC III",
+            "Nội dung phụ lục III",
+            "PHỤ LỤC IV",
+            "Nội dung phụ lục IV",
+            "PHỤ LỤC V",
+            "Nội dung phụ lục V",
+            "PHỤ LỤC VI",
+            "Nội dung phụ lục VI",
+            "PHỤ LỤC VII",
+            "Nội dung phụ lục VII",
+            "PHỤ LỤC VIII",
+            "Nội dung phụ lục VIII",
+        ]
+    )
+    parsed = make_parsed(raw_text)
+    asset = build_legal_knowledge_asset(parsed)
+    structure = build_structure(asset)
+    validation = validate_structure_for_export(asset)
+    markdown = render_gpt_knowledge_from_asset(asset)
+
+    issued = structure["tree"]["issued_content"][0]
+    assert validation["status"] in {"PASS", "WARNING"}
+    assert asset.stats["main_document_article_count"] == 3
+    assert asset.stats["issued_content_count"] == 1
+    assert asset.stats["issued_content_provision_count"] == 7
+    assert asset.stats["appendix_count"] == 8
+    assert [item["number"] for item in issued["provisions"]] == ["1", "2", "3", "4", "5", "6", "7"]
+    assert [item["canonical_number"] for item in issued["appendices"]] == ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"]
+    assert "## Nội dung ban hành kèm theo" in markdown
+    assert "Phụ lục 01. Phụ lục" not in markdown
