@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app.document_processor import Appendix, Article, ParsedDocument
@@ -10,6 +12,7 @@ from app.legal_asset import (
     render_gpt_knowledge_from_asset,
     validate_asset,
     validate_structure_for_export,
+    write_legal_asset_outputs,
 )
 
 
@@ -223,3 +226,48 @@ def test_gpt_export_requires_asset_validation_pass():
     assert validation["status"] == "FAIL"
     with pytest.raises(ValueError, match="Structure validation FAIL"):
         render_gpt_knowledge_from_asset(asset)
+
+
+def test_semantic_layer_exports_json_and_markdown_sections(tmp_path):
+    raw_text = "\n".join(
+        [
+            "Điều 1. Ban hành kèm theo Quyết định này Hướng dẫn xác định chi phí phần mềm nội bộ.",
+            "Điều 2. Hiệu lực thi hành",
+            "Điều 3. Tổ chức thực hiện",
+            "KT. BỘ TRƯỞNG",
+            "HƯỚNG DẪN XÁC ĐỊNH CHI PHÍ PHẦN MỀM NỘI BỘ",
+            "(Ban hành kèm theo Quyết định số 671/QĐ-BTTTT)",
+            "Điều 1. Giải thích từ ngữ",
+            "1. Tác nhân (Actor) là vai trò tương tác với phần mềm nội bộ.",
+            "Điều 2. Trình tự xác định chi phí",
+            "1. Xác định hồ sơ phục vụ xác định chi phí phần mềm nội bộ.",
+            "2. Tính chi phí theo Phụ lục I.",
+            "PHỤ LỤC I",
+            "CÔNG THỨC XÁC ĐỊNH CHI PHÍ",
+            "G = 1,4 x E x P x H",
+        ]
+    )
+    parsed = make_parsed(raw_text)
+
+    asset = build_legal_knowledge_asset(parsed)
+    outputs = write_legal_asset_outputs(asset, tmp_path)
+
+    assert asset.validation["status"] == "PASS"
+    assert (outputs["semantic_dir"] / "topics.json").exists()
+    assert (outputs["semantic_dir"] / "keywords.json").exists()
+    assert (outputs["semantic_dir"] / "concepts.json").exists()
+    assert (outputs["semantic_dir"] / "formulas.json").exists()
+    assert (outputs["semantic_dir"] / "procedures.json").exists()
+    assert (outputs["semantic_dir"] / "cross_references.json").exists()
+    assert (outputs["semantic_dir"] / "legal_references.json").exists()
+    assert (outputs["semantic_dir"] / "appendix_metadata.json").exists()
+    formulas = json.loads((outputs["semantic_dir"] / "formulas.json").read_text(encoding="utf-8"))
+    procedures = json.loads((outputs["semantic_dir"] / "procedures.json").read_text(encoding="utf-8"))
+    markdown = outputs["gpt_markdown"].read_text(encoding="utf-8")
+
+    assert any(item["display_expression"] == "G = 1,4 x E x P x H" for item in formulas)
+    assert procedures and len(procedures[0]["steps"]) == 2
+    assert "## Chỉ mục khái niệm" in markdown
+    assert "## Công thức" in markdown
+    assert "## Trình tự thực hiện" in markdown
+    assert "| node_id | scope_type | title | topics | canonical_keywords | formulas | references |" in markdown
