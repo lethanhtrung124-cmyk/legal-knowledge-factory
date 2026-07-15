@@ -56,6 +56,22 @@ knowledge_packs/{document_number}/
 knowledge_packs/{document_number}.zip
 ```
 
+Để sinh thêm **Legal Knowledge Asset 2.0** song song với Knowledge Pack cũ:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --input uploads\224_2026_ND-CP_712767.docx --output knowledge_packs --asset
+```
+
+Các file bổ sung:
+
+```text
+LEGAL_ASSET_{document_number}.json
+LEGAL_ASSET_{document_number}.md
+MIGRATION_REPORT_{document_number}.md
+ASSET_VALIDATION_{document_number}.md
+REGRESSION_SUMMARY_{document_number}.md
+```
+
 ## Triển khai lên web
 
 Xem hướng dẫn trong [DEPLOYMENT.md](DEPLOYMENT.md). Project đã có sẵn:
@@ -76,6 +92,14 @@ Sau khi cài dependencies, có thể chạy smoke test end-to-end:
 ```
 
 Smoke test sẽ tự tạo một file `.docx` mẫu, khởi động server tạm thời, upload file và kiểm tra `.zip` đầu ra có đủ các file Knowledge Pack chính.
+
+Chạy regression cho bộ văn bản chuẩn:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\regression_asset.py --corpus "D:\3. Ca nhan\3. VB CNTT, CĐS" --output knowledge_packs
+```
+
+Script tạo `LEGAL_ASSET_REGRESSION_SUMMARY.json` và trả mã lỗi nếu có asset `FAIL`.
 
 ## Cấu hình
 
@@ -133,6 +157,55 @@ Sau khi sinh pack, ứng dụng tạo `validation_report.md` với kết luận:
 - `PASS`: đủ điều kiện dùng.
 - `WARNING`: dùng được nhưng có cảnh báo cần rà soát.
 - `FAIL`: không cho tải bản chính thức trên giao diện web.
+
+## Legal Knowledge Asset 2.0
+
+Asset 2.0 bổ sung mô hình node cha-con để xử lý văn bản có nội dung ban hành kèm theo:
+
+```text
+MAIN_DOCUMENT
+└── ISSUED_CONTENT
+    ├── PROVISION
+    ├── APPENDIX
+    ├── FORM
+    ├── TABLE
+    └── REFERENCE
+```
+
+Mỗi node có các trường chính:
+
+```json
+{
+  "id": "",
+  "node_type": "",
+  "number": "",
+  "title": "",
+  "parent_id": "",
+  "order": 0,
+  "original_text": "",
+  "normalized_text": "",
+  "source_location": {},
+  "checksum": "",
+  "review_status": ""
+}
+```
+
+Quy tắc nhận diện `ISSUED_CONTENT` dùng nhiều tín hiệu: câu “ban hành kèm theo”, heading như `HƯỚNG DẪN`, `QUY CHẾ`, `KHUNG`, `DANH MỤC`, dòng xác nhận “Ban hành kèm theo Quyết định số...” và vị trí sau phần ký. Heading `Phụ lục` hoặc `Mẫu số` không được tự động coi là `ISSUED_CONTENT`.
+
+Quy tắc phân biệt `APPENDIX` và `REFERENCE`: chỉ tạo `APPENDIX` khi “Phụ lục/Mẫu số/Biểu mẫu” là heading riêng tại biên khối mới và có nội dung đi kèm; các câu như “theo Phụ lục IV” hoặc ô bảng chỉ dẫn chiếu được giữ thành `REFERENCE`.
+
+ID ổn định theo phạm vi:
+
+```text
+{document}-MAIN
+{document}-MAIN-ART1
+{document}-ISSUED01
+{document}-ISSUED01-ART1
+{document}-ISSUED01-APP-I
+{document}-ISSUED01-FORM-01
+```
+
+Để thêm loại tài liệu ban hành kèm theo mới, cập nhật `ISSUED_CONTENT_HEADING_RE` trong `app/legal_asset.py`, bổ sung từ khóa vào rule tín hiệu nếu cần, rồi thêm test tương ứng trong `tests/test_legal_asset.py`.
 
 ## Lưu ý
 

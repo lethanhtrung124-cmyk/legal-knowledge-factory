@@ -64,7 +64,7 @@ def wait_for_server() -> None:
     raise RuntimeError("Server did not start in time.")
 
 
-def upload_docx(path: Path) -> tuple[bytes, str]:
+def upload_docx(path: Path) -> tuple[bytes, dict[str, str]]:
     boundary = "----codexboundary"
     data = path.read_bytes()
     head = (
@@ -84,12 +84,18 @@ def upload_docx(path: Path) -> tuple[bytes, str]:
     payload = response.read()
     if response.status != 200:
         raise RuntimeError(payload[:500].decode("utf-8", errors="replace"))
-    return payload, response.getheader("X-GPT-Knowledge-Url") or ""
+    headers = {
+        "gpt_markdown": response.getheader("X-GPT-Knowledge-Url") or "",
+        "asset_json": response.getheader("X-Legal-Asset-Json-Url") or "",
+        "asset_markdown": response.getheader("X-Legal-Asset-Markdown-Url") or "",
+        "asset_validation": response.getheader("X-Legal-Asset-Validation-Url") or "",
+    }
+    return payload, headers
 
 
-def download_markdown(markdown_url: str) -> str:
+def download_text(path_url: str) -> str:
     connection = http.client.HTTPConnection(HOST, PORT, timeout=30)
-    connection.request("GET", markdown_url)
+    connection.request("GET", path_url)
     response = connection.getresponse()
     payload = response.read()
     if response.status != 200:
@@ -107,10 +113,16 @@ def main() -> None:
     thread.start()
 
     wait_for_server()
-    payload, markdown_url = upload_docx(sample_path)
+    payload, urls = upload_docx(sample_path)
+    markdown_url = urls["gpt_markdown"]
     if not markdown_url.startswith("/api/knowledge-markdown/GPT_KNOWLEDGE_"):
         raise RuntimeError(f"Missing GPT Markdown download URL: {markdown_url}")
-    markdown = download_markdown(markdown_url)
+    markdown = download_text(markdown_url)
+    if not urls["asset_json"].startswith("/api/legal-asset/LEGAL_ASSET_"):
+        raise RuntimeError(f"Missing Legal Asset JSON download URL: {urls['asset_json']}")
+    asset_json = download_text(urls["asset_json"])
+    asset_markdown = download_text(urls["asset_markdown"])
+    asset_validation = download_text(urls["asset_validation"])
     names = zipfile.ZipFile(BytesIO(payload)).namelist()
     archive = zipfile.ZipFile(BytesIO(payload))
     required = {
@@ -165,6 +177,9 @@ def main() -> None:
         "merged_markdown_title": markdown.startswith("# Quy định về kiểm thử Knowledge Pack"),
         "merged_markdown_original": "Điều 92. Nội dung nghiệp vụ 92" in markdown,
         "merged_markdown_no_prompt": "System Prompt" not in markdown,
+        "asset_json_schema": '"schema_version": "2.0"' in asset_json,
+        "asset_markdown_truth": "## SOURCE OF TRUTH" in asset_markdown,
+        "asset_validation_report": "# Asset Validation" in asset_validation,
     }
     failed = [name for name, passed in checks.items() if not passed]
     if failed:

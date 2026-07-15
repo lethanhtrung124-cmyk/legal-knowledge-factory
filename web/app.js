@@ -61,6 +61,24 @@ form.addEventListener("submit", async (event) => {
       downloadArea.appendChild(markdownLink);
     }
 
+    const assetLinks = [
+      ["X-Legal-Asset-Json-Url", "Tải Legal Asset JSON", `${baseName}_legal_asset.json`],
+      ["X-Legal-Asset-Markdown-Url", "Tải Legal Asset Markdown", `${baseName}_legal_asset.md`],
+      ["X-Legal-Asset-Migration-Url", "Tải Migration Report", `${baseName}_migration_report.md`],
+      ["X-Legal-Asset-Validation-Url", "Tải Asset Validation", `${baseName}_asset_validation.md`],
+      ["X-Legal-Asset-Regression-Url", "Tải Regression Summary", `${baseName}_regression_summary.md`],
+    ];
+    for (const [header, label, downloadName] of assetLinks) {
+      const assetUrl = response.headers.get(header);
+      if (!assetUrl) continue;
+      const assetLink = document.createElement("a");
+      assetLink.href = assetUrl.startsWith("http") ? assetUrl : `${apiBaseUrl}${assetUrl}`;
+      assetLink.download = downloadName;
+      assetLink.className = "download";
+      assetLink.textContent = label;
+      downloadArea.appendChild(assetLink);
+    }
+
     statusBox.textContent = validationStatus
       ? `Hoàn tất. Validation: ${validationStatus}. Knowledge Pack đã sẵn sàng.`
       : "Hoàn tất. Knowledge Pack đã sẵn sàng.";

@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from .config import ALLOWED_EXTENSIONS, FRONTEND_ORIGIN, MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, OUTPUT_DIR, UPLOAD_DIR
 from .document_processor import parse_document
 from .knowledge_pack import build_knowledge_pack, gpt_knowledge_file_name
+from .legal_asset import build_legal_knowledge_asset, write_legal_asset_outputs
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,7 +40,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Validation-Status", "X-GPT-Knowledge-Url"],
+    expose_headers=[
+        "X-Validation-Status",
+        "X-GPT-Knowledge-Url",
+        "X-Legal-Asset-Json-Url",
+        "X-Legal-Asset-Markdown-Url",
+        "X-Legal-Asset-Migration-Url",
+        "X-Legal-Asset-Validation-Url",
+        "X-Legal-Asset-Regression-Url",
+    ],
 )
 
 
@@ -65,6 +74,24 @@ def download_knowledge_markdown(file_name: str):
     return FileResponse(markdown_path, media_type="text/markdown; charset=utf-8", filename=safe_name)
 
 
+@app.get("/api/legal-asset/{file_name}")
+def download_legal_asset_file(file_name: str):
+    safe_name = Path(file_name).name
+    allowed_prefixes = (
+        "LEGAL_ASSET_",
+        "MIGRATION_REPORT_",
+        "ASSET_VALIDATION_",
+        "REGRESSION_SUMMARY_",
+    )
+    if safe_name != file_name or not safe_name.startswith(allowed_prefixes):
+        raise HTTPException(status_code=400, detail="Tên file Legal Asset không hợp lệ.")
+    asset_path = OUTPUT_DIR / "knowledge_packs" / safe_name
+    if not asset_path.exists():
+        raise HTTPException(status_code=404, detail="Không tìm thấy file Legal Asset.")
+    media_type = "application/json" if safe_name.endswith(".json") else "text/markdown; charset=utf-8"
+    return FileResponse(asset_path, media_type=media_type, filename=safe_name)
+
+
 @app.post("/api/knowledge-pack", response_model=None)
 async def create_knowledge_pack(file: UploadFile = File(...)):
     original_name = Path(file.filename or "").name
@@ -87,6 +114,7 @@ async def create_knowledge_pack(file: UploadFile = File(...)):
         parsed = parse_document(upload_path)
         zip_path = build_knowledge_pack(parsed)
         gpt_markdown_name = gpt_knowledge_file_name(parsed)
+        asset_outputs = write_legal_asset_outputs(build_legal_knowledge_asset(parsed), OUTPUT_DIR / "knowledge_packs")
         report_path = zip_path.with_suffix("") / "validation_report.md"
         validation_report = report_path.read_text(encoding="utf-8") if report_path.exists() else ""
         if "- Kết luận: FAIL" in validation_report:
@@ -107,6 +135,11 @@ async def create_knowledge_pack(file: UploadFile = File(...)):
     download_name = f"{Path(original_name).stem}_knowledge_pack.zip"
     response = FileResponse(zip_path, media_type="application/zip", filename=download_name)
     response.headers["X-GPT-Knowledge-Url"] = f"/api/knowledge-markdown/{quote(gpt_markdown_name)}"
+    response.headers["X-Legal-Asset-Json-Url"] = f"/api/legal-asset/{quote(asset_outputs['json'].name)}"
+    response.headers["X-Legal-Asset-Markdown-Url"] = f"/api/legal-asset/{quote(asset_outputs['markdown'].name)}"
+    response.headers["X-Legal-Asset-Migration-Url"] = f"/api/legal-asset/{quote(asset_outputs['migration_report'].name)}"
+    response.headers["X-Legal-Asset-Validation-Url"] = f"/api/legal-asset/{quote(asset_outputs['validation_report'].name)}"
+    response.headers["X-Legal-Asset-Regression-Url"] = f"/api/legal-asset/{quote(asset_outputs['regression_summary'].name)}"
     if validation_report:
         status_line = next((line for line in validation_report.splitlines() if line.startswith("- Kết luận:")), "")
         response.headers["X-Validation-Status"] = status_line.replace("- Kết luận:", "").strip()
@@ -326,6 +359,23 @@ INDEX_HTML = """
           markdownLink.className = "download";
           markdownLink.textContent = "Tải file GPT Markdown";
           downloadArea.appendChild(markdownLink);
+        }
+        const assetLinks = [
+          ["X-Legal-Asset-Json-Url", "Tải Legal Asset JSON", `${baseName}_legal_asset.json`],
+          ["X-Legal-Asset-Markdown-Url", "Tải Legal Asset Markdown", `${baseName}_legal_asset.md`],
+          ["X-Legal-Asset-Migration-Url", "Tải Migration Report", `${baseName}_migration_report.md`],
+          ["X-Legal-Asset-Validation-Url", "Tải Asset Validation", `${baseName}_asset_validation.md`],
+          ["X-Legal-Asset-Regression-Url", "Tải Regression Summary", `${baseName}_regression_summary.md`],
+        ];
+        for (const [header, label, downloadName] of assetLinks) {
+          const assetUrl = response.headers.get(header);
+          if (!assetUrl) continue;
+          const assetLink = document.createElement("a");
+          assetLink.href = assetUrl;
+          assetLink.download = downloadName;
+          assetLink.className = "download";
+          assetLink.textContent = label;
+          downloadArea.appendChild(assetLink);
         }
         statusBox.textContent = "Hoàn tất. Knowledge Pack đã sẵn sàng.";
       } catch (error) {
