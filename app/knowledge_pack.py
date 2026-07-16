@@ -822,22 +822,55 @@ def build_citation_index(article_knowledge: list[ArticleKnowledge]) -> list[dict
 
 def build_article_knowledge(parsed: ParsedDocument) -> list[ArticleKnowledge]:
     items: list[ArticleKnowledge] = []
+    article_features: list[dict[str, object]] = []
     for article in parsed.articles:
         keyword_groups = extract_keyword_groups(article.raw_content)
+        article_features.append(
+            {
+                "article": article,
+                "keyword_groups": keyword_groups,
+                "topics": infer_topics(article),
+                "keywords": set(sum(keyword_groups.values(), [])),
+            }
+        )
+    for feature in article_features:
+        article = feature["article"]
+        keyword_groups = feature["keyword_groups"]
         topics = infer_topics(article)
         item = ArticleKnowledge(
             article=article,
-            topics=topics,
+            topics=feature["topics"],
             legal_keywords=keyword_groups["legal"],
             business_keywords=keyword_groups["business"],
             technology_keywords=keyword_groups["technology"],
             state_keywords=keyword_groups["state"],
             related_keywords=keyword_groups["related"],
         )
-        item.related_articles = find_related_articles(article, parsed.articles)
+        item.related_articles = find_related_articles_from_features(article, article_features)
         item.faqs = build_article_faqs(item)
         items.append(item)
     return items
+
+
+def find_related_articles_from_features(article: Article, article_features: list[dict[str, object]], limit: int = 5) -> list[Article]:
+    refs = set(re.findall(r"Điều\s+(\d+[a-zA-Z]?)", article.raw_content, flags=re.IGNORECASE))
+    related: list[Article] = []
+    for feature in article_features:
+        candidate = feature["article"]
+        if candidate.number in refs and candidate.number != article.number:
+            related.append(candidate)
+    if len(related) < limit:
+        current_keywords = next((feature["keywords"] for feature in article_features if feature["article"] is article), set())
+        scored: list[tuple[int, Article]] = []
+        for feature in article_features:
+            candidate = feature["article"]
+            if candidate.number == article.number or candidate in related:
+                continue
+            score = len(current_keywords.intersection(feature["keywords"]))
+            if score:
+                scored.append((score, candidate))
+        related.extend(item for _, item in sorted(scored, key=lambda row: -row[0]))
+    return related[:limit]
 
 
 def extract_keyword_groups(text: str) -> dict[str, list[str]]:
