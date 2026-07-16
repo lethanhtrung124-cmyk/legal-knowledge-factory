@@ -2034,8 +2034,9 @@ def write_legal_asset_outputs(asset: LegalKnowledgeAsset, output_root: Path) -> 
     write_semantic_outputs(asset, semantic_dir)
     if structure_validation["status"] == "FAIL":
         raise ValueError("Structure validation FAIL: " + "; ".join(structure_validation["errors"]))
-    md_path.write_text(render_asset_markdown(asset), encoding="utf-8")
-    gpt_path.write_text(render_gpt_knowledge_from_asset(asset), encoding="utf-8")
+    markdown = render_asset_markdown(asset)
+    md_path.write_text(markdown, encoding="utf-8")
+    gpt_path.write_text(markdown, encoding="utf-8")
     write_asset_docx(asset, docx_path)
     return {
         "json": json_path,
