@@ -23,7 +23,8 @@ from .document_processor import (
     parse_structure,
 )
 from .knowledge_pack import (
-    build_article_knowledge,
+    ArticleKnowledge,
+    build_article_faqs,
     document_folder_name,
     embed_markdown_section,
     extract_keyword_groups,
@@ -1990,12 +1991,25 @@ def render_asset_faq(article_knowledge) -> str:
 
 
 def build_article_knowledge_from_nodes(nodes: list[AssetNode]):
-    class MinimalParsed:
-        articles: list[Article]
-
-    parsed = MinimalParsed()
-    parsed.articles = [node_to_article(node) for node in nodes if node.node_type == "PROVISION"]
-    return build_article_knowledge(parsed)  # type: ignore[arg-type]
+    article_knowledge: list[ArticleKnowledge] = []
+    for node in nodes:
+        if node.node_type != "PROVISION":
+            continue
+        article = node_to_article(node)
+        keyword_groups = extract_keyword_groups(article.raw_content)
+        item = ArticleKnowledge(
+            article=article,
+            topics=infer_topics(article),
+            legal_keywords=keyword_groups["legal"],
+            business_keywords=keyword_groups["business"],
+            technology_keywords=keyword_groups["technology"],
+            state_keywords=keyword_groups["state"],
+            related_keywords=keyword_groups["related"],
+        )
+        item.related_articles = []
+        item.faqs = build_article_faqs(item)
+        article_knowledge.append(item)
+    return article_knowledge
 
 
 def node_to_article(node: AssetNode) -> Article:
