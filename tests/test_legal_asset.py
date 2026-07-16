@@ -261,12 +261,19 @@ def test_semantic_layer_exports_json_and_markdown_sections(tmp_path):
     assert (outputs["semantic_dir"] / "cross_references.json").exists()
     assert (outputs["semantic_dir"] / "legal_references.json").exists()
     assert (outputs["semantic_dir"] / "appendix_metadata.json").exists()
+    assert (outputs["semantic_dir"] / "semantic_validation_report.json").exists()
     formulas = json.loads((outputs["semantic_dir"] / "formulas.json").read_text(encoding="utf-8"))
+    entities = json.loads((outputs["semantic_dir"] / "entities.json").read_text(encoding="utf-8"))
     procedures = json.loads((outputs["semantic_dir"] / "procedures.json").read_text(encoding="utf-8"))
+    semantic_report = json.loads((outputs["semantic_dir"] / "semantic_validation_report.json").read_text(encoding="utf-8"))
     markdown = outputs["gpt_markdown"].read_text(encoding="utf-8")
 
     assert any(item["display_expression"] == "G = 1,4 x E x P x H" for item in formulas)
+    assert all(item["supporting_node_ids"] for item in formulas)
+    assert {"FORMULA_VARIABLE", "LEGAL_AUTHORITY", "APPLICABLE_SUBJECT"} <= {item["entity_type"] for item in entities}
     assert procedures and len(procedures[0]["steps"]) == 2
+    assert semantic_report["status"] == "PASS"
+    assert all(check["status"] == "PASS" for check in semantic_report["checks"])
     assert "## Chỉ mục khái niệm" in markdown
     assert "## Công thức" in markdown
     assert "## Trình tự thực hiện" in markdown
