@@ -55,6 +55,7 @@ app.add_middleware(
         "X-Legal-Asset-Word-Url",
         "X-Legal-Asset-Migration-Url",
         "X-Legal-Asset-Validation-Url",
+        "X-Legal-Asset-Semantic-Validation-Url",
         "X-Legal-Asset-Regression-Url",
         "X-Legal-Asset-Runtime-Log-Url",
     ],
@@ -90,6 +91,7 @@ def download_legal_asset_file(file_name: str):
         "LEGAL_ASSET_",
         "MIGRATION_REPORT_",
         "ASSET_VALIDATION_",
+        "SEMANTIC_VALIDATION_",
         "REGRESSION_SUMMARY_",
         "STRUCTURE_",
         "RUNTIME_LOG_",
@@ -167,6 +169,7 @@ async def create_knowledge_pack(file: UploadFile = File(...)):
     response.headers["X-Legal-Asset-Word-Url"] = f"/api/legal-asset/{quote(asset_outputs['word'].name)}"
     response.headers["X-Legal-Asset-Migration-Url"] = f"/api/legal-asset/{quote(asset_outputs['migration_report'].name)}"
     response.headers["X-Legal-Asset-Validation-Url"] = f"/api/legal-asset/{quote(asset_outputs['validation_report'].name)}"
+    response.headers["X-Legal-Asset-Semantic-Validation-Url"] = f"/api/legal-asset/{quote(asset_outputs['semantic_validation_report'].name)}"
     response.headers["X-Legal-Asset-Regression-Url"] = f"/api/legal-asset/{quote(asset_outputs['regression_summary'].name)}"
     response.headers["X-Legal-Asset-Runtime-Log-Url"] = f"/api/legal-asset/{quote(asset_outputs['runtime_log'].name)}"
     if validation_report:
@@ -396,6 +399,7 @@ INDEX_HTML = """
           ["X-Legal-Asset-Word-Url", "Tải Legal Asset Word", `${baseName}_legal_asset.docx`],
           ["X-Legal-Asset-Migration-Url", "Tải Migration Report", `${baseName}_migration_report.md`],
           ["X-Legal-Asset-Validation-Url", "Tải Asset Validation", `${baseName}_asset_validation.md`],
+          ["X-Legal-Asset-Semantic-Validation-Url", "Tải Semantic Validation", `${baseName}_semantic_validation.md`],
           ["X-Legal-Asset-Regression-Url", "Tải Regression Summary", `${baseName}_regression_summary.md`],
           ["X-Legal-Asset-Runtime-Log-Url", "Tải Runtime Log", `${baseName}_runtime.log`],
         ];

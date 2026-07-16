@@ -789,7 +789,7 @@ def build_semantic_data(asset: LegalKnowledgeAsset) -> dict[str, object]:
     procedures = build_semantic_procedures(asset)
     cross_references = build_cross_references(asset)
     legal_references = build_legal_references(asset)
-    entities = build_semantic_entities(asset, formulas, legal_references)
+    entities = build_semantic_entities(asset, keywords, formulas, legal_references)
     appendix_metadata = build_appendix_metadata(asset, keywords, formulas)
     concepts = [entity for entity in entities if entity["entity_type"] in {"LEGAL_CONCEPT", "TECHNICAL_CONCEPT"}]
     return {
@@ -872,10 +872,12 @@ def build_semantic_keywords(asset: LegalKnowledgeAsset) -> list[dict[str, object
 
 def build_semantic_entities(
     asset: LegalKnowledgeAsset,
+    keywords: list[dict[str, object]],
     formulas: list[dict[str, object]],
     legal_references: list[dict[str, object]],
 ) -> list[dict[str, object]]:
     entities: dict[str, dict[str, object]] = {}
+    node_by_id = {node.id: node for node in asset.nodes}
     root = next((node for node in asset.nodes if node.id == asset.root_id), None)
     if root:
         issuing_authority = str(root.metadata.get("issuing_authority") or "").strip()
@@ -931,6 +933,27 @@ def build_semantic_entities(
                 aliases=[abbr] if abbr else [],
                 review_status="PASS",
             )
+    for keyword in keywords:
+        if not is_entity_keyword(keyword):
+            continue
+        node_ids = [str(node_id) for node_id in keyword.get("node_ids", []) if str(node_id) in node_by_id]
+        if not node_ids:
+            continue
+        display_term = str(keyword.get("display_term") or keyword.get("canonical_term") or "").strip()
+        canonical_term = str(keyword.get("canonical_term") or canonical_id(display_term))
+        definition_node_id = node_ids[0]
+        add_entity(
+            entities,
+            entity_id=f"ENT-CONCEPT-{canonical_term.upper()}",
+            canonical_name=canonical_term,
+            display_name=display_term,
+            entity_type=entity_type_from_keyword(keyword),
+            definition=definition_from_keyword_node(display_term, node_by_id[definition_node_id]),
+            definition_node_id=definition_node_id,
+            mentioned_node_ids=node_ids,
+            aliases=[str(alias) for alias in keyword.get("aliases", [])],
+            review_status="PASS",
+        )
         for actor in extract_legal_actors(node.original_text):
             add_entity(
                 entities,
@@ -1179,6 +1202,11 @@ def validate_semantic_data(asset: LegalKnowledgeAsset) -> dict[str, object]:
             errors.append(error("KB-SEM-ENTITY", f"Entity thiếu supporting node: {entity.get('entity_id')}"))
         if not entity.get("display_name") or not entity.get("entity_type"):
             errors.append(error("KB-SEM-ENTITY", f"Entity thiếu tên hoặc loại: {entity.get('entity_id')}"))
+    for keyword in keywords:
+        if is_entity_keyword(keyword):
+            expected_entity_id = f"ENT-CONCEPT-{str(keyword.get('canonical_term')).upper()}"
+            if expected_entity_id not in entity_ids:
+                errors.append(error("KB-SEM-ENTITY", f"Thiếu entity cho khái niệm quan trọng: {keyword.get('display_term')}"))
     node_by_id = {node.id: node for node in asset.nodes}
     formula_keys: list[str] = []
     for formula in formulas:
@@ -1258,6 +1286,7 @@ def build_semantic_validation_report(
     formulas = asset.semantic.get("formulas", [])
     cross_references = asset.semantic.get("cross_references", [])
     legal_references = asset.semantic.get("legal_references", [])
+    keywords = asset.semantic.get("keywords", [])
     entity_types: dict[str, int] = {}
     for entity in entities:
         entity_type = str(entity.get("entity_type", "UNKNOWN"))
@@ -1272,12 +1301,28 @@ def build_semantic_validation_report(
         }
         for formula in formulas
     ]
+    important_keywords = [keyword for keyword in keywords if is_entity_keyword(keyword)]
+    covered_keyword_entities = [
+        keyword
+        for keyword in important_keywords
+        if f"ENT-CONCEPT-{str(keyword.get('canonical_term')).upper()}" in {str(entity.get("entity_id")) for entity in entities}
+    ]
+    keyword_coverage = {
+        "important_keyword_count": len(important_keywords),
+        "covered_keyword_entity_count": len(covered_keyword_entities),
+        "coverage_ratio": round(len(covered_keyword_entities) / len(important_keywords), 4) if important_keywords else 1.0,
+        "missing_keywords": [
+            str(keyword.get("display_term"))
+            for keyword in important_keywords
+            if f"ENT-CONCEPT-{str(keyword.get('canonical_term')).upper()}" not in {str(entity.get("entity_id")) for entity in entities}
+        ],
+    }
     checks = [
         {
             "check_id": "KB-SEM-ENT-001",
             "name": "Entity pháp lý và biến công thức",
             "status": "FAIL" if any(item["code"] == "KB-SEM-ENTITY" for item in errors) else "PASS",
-            "evidence": {"entity_count": len(entities), "entity_types": entity_types},
+            "evidence": {"entity_count": len(entities), "entity_types": entity_types, "keyword_coverage": keyword_coverage},
         },
         {
             "check_id": "KB-SEM-FORM-001",
@@ -1308,6 +1353,8 @@ def build_semantic_validation_report(
             "formula_count": len(formulas),
             "cross_reference_count": len(cross_references),
             "legal_reference_count": len(legal_references),
+            "important_keyword_count": len(important_keywords),
+            "covered_keyword_entity_count": len(covered_keyword_entities),
             "error_count": len(errors),
             "warning_count": len(warnings),
         },
@@ -1379,6 +1426,34 @@ LEGAL_ACTOR_PATTERNS = (
     "ủy ban nhân dân",
     "cơ quan chuyên môn",
 )
+
+
+ENTITY_KEYWORD_TYPES = {"LEGAL_TERM", "TECHNICAL_TERM", "PROCEDURE"}
+
+
+def is_entity_keyword(keyword: dict[str, object]) -> bool:
+    term = str(keyword.get("display_term") or "")
+    if not term or len(term) < 3:
+        return False
+    if str(keyword.get("keyword_type")) not in ENTITY_KEYWORD_TYPES:
+        return False
+    return valid_keyword(term)
+
+
+def entity_type_from_keyword(keyword: dict[str, object]) -> str:
+    keyword_type_value = str(keyword.get("keyword_type"))
+    if keyword_type_value == "TECHNICAL_TERM":
+        return "TECHNICAL_CONCEPT"
+    return "LEGAL_CONCEPT"
+
+
+def definition_from_keyword_node(term: str, node: AssetNode) -> str:
+    term_lower = term.lower()
+    for sentence in re.split(r"(?<=[.;:])\s+|\n+", node.original_text):
+        sentence = re.sub(r"\s+", " ", sentence).strip(" .;:")
+        if term_lower in sentence.lower() and len(sentence) <= 260:
+            return sentence
+    return f"Khái niệm được trích xuất từ {node.title or node.id}."
 
 
 def extract_legal_actors(text: str) -> list[str]:
@@ -1778,6 +1853,7 @@ def write_legal_asset_outputs(asset: LegalKnowledgeAsset, output_root: Path) -> 
     semantic_dir = output_root / f"semantic_{safe}"
     migration_path = output_root / f"MIGRATION_REPORT_{safe}.md"
     validation_path = output_root / f"ASSET_VALIDATION_{safe}.md"
+    semantic_validation_path = output_root / f"SEMANTIC_VALIDATION_{safe}.md"
     regression_path = output_root / f"REGRESSION_SUMMARY_{safe}.md"
     runtime_log_path = output_root / f"RUNTIME_LOG_{safe}.log"
     json_path.write_text(json.dumps(asset_to_dict(asset), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1787,6 +1863,7 @@ def write_legal_asset_outputs(asset: LegalKnowledgeAsset, output_root: Path) -> 
     structure_path.write_text(json.dumps(structure, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     migration_path.write_text(render_migration_report(asset), encoding="utf-8")
     validation_path.write_text(render_asset_validation_report(asset), encoding="utf-8")
+    semantic_validation_path.write_text(render_semantic_validation_report(asset), encoding="utf-8")
     regression_path.write_text(render_regression_summary(asset), encoding="utf-8")
     runtime_log_path.write_text(render_runtime_log(asset, structure_validation), encoding="utf-8")
     write_semantic_outputs(asset, semantic_dir)
@@ -1804,6 +1881,7 @@ def write_legal_asset_outputs(asset: LegalKnowledgeAsset, output_root: Path) -> 
         "semantic_dir": semantic_dir,
         "migration_report": migration_path,
         "validation_report": validation_path,
+        "semantic_validation_report": semantic_validation_path,
         "regression_summary": regression_path,
         "runtime_log": runtime_log_path,
     }
@@ -1828,6 +1906,7 @@ def write_semantic_outputs(asset: LegalKnowledgeAsset, semantic_dir: Path) -> No
         json.dumps(asset.semantic.get("validation_report", {}), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    (semantic_dir / "semantic_validation_report.md").write_text(render_semantic_validation_report(asset), encoding="utf-8")
 
 
 def render_runtime_log(asset: LegalKnowledgeAsset, structure_validation: dict[str, object]) -> str:
@@ -1945,6 +2024,45 @@ def render_asset_validation_report(asset: LegalKnowledgeAsset) -> str:
     lines.extend(f"- {item['code']}: {item['message']}" for item in errors) if errors else lines.append("- Không có.")
     lines.extend(["", "## Warnings"])
     warnings = validation["warnings"]
+    lines.extend(f"- {item['code']}: {item['message']}" for item in warnings) if warnings else lines.append("- Không có.")
+    return "\n".join(lines).strip() + "\n"
+
+
+def render_semantic_validation_report(asset: LegalKnowledgeAsset) -> str:
+    report = asset.semantic.get("validation_report", {})
+    metrics = report.get("metrics", {}) if isinstance(report, dict) else {}
+    lines = [
+        f"# Semantic Validation Report - {asset.document_number}",
+        "",
+        f"- Kết luận: {report.get('status', 'UNKNOWN') if isinstance(report, dict) else 'UNKNOWN'}",
+        f"- Asset ID: {asset.root_id}",
+        f"- Số entity: {metrics.get('entity_count', 0)}",
+        f"- Số công thức: {metrics.get('formula_count', 0)}",
+        f"- Số cross-reference: {metrics.get('cross_reference_count', 0)}",
+        f"- Số legal-reference: {metrics.get('legal_reference_count', 0)}",
+        f"- Keyword quan trọng đã có entity: {metrics.get('covered_keyword_entity_count', 0)}/{metrics.get('important_keyword_count', 0)}",
+        "",
+        "## Checks",
+        "",
+    ]
+    checks = report.get("checks", []) if isinstance(report, dict) else []
+    if checks:
+        for check in checks:
+            lines.extend(
+                [
+                    f"### {check.get('check_id')} - {check.get('name')}",
+                    f"- Trạng thái: {check.get('status')}",
+                    f"- Bằng chứng: `{json.dumps(check.get('evidence', {}), ensure_ascii=False)}`",
+                    "",
+                ]
+            )
+    else:
+        lines.append("- Không có dữ liệu kiểm định semantic.")
+    lines.extend(["## Errors", ""])
+    errors = report.get("errors", []) if isinstance(report, dict) else []
+    lines.extend(f"- {item['code']}: {item['message']}" for item in errors) if errors else lines.append("- Không có.")
+    lines.extend(["", "## Warnings", ""])
+    warnings = report.get("warnings", []) if isinstance(report, dict) else []
     lines.extend(f"- {item['code']}: {item['message']}" for item in warnings) if warnings else lines.append("- Không có.")
     return "\n".join(lines).strip() + "\n"
 
