@@ -8,6 +8,11 @@ from app.legal_asset import build_legal_knowledge_asset, write_legal_asset_outpu
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description="Build Legal Knowledge Pack 1.0")
     parser.add_argument("--input", required=True, help="Path to .docx or .pdf legal document")
     parser.add_argument("--output", default="knowledge_packs", help="Output folder for knowledge packs")
