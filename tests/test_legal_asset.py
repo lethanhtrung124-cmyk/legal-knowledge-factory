@@ -312,3 +312,36 @@ def test_semantic_engine_canonicalizes_and_deduplicates_core_indexes():
     assert len(legal_refs) == 1
     assert legal_refs[0]["target_document_type"] == "Nghị định"
     assert legal_refs[0]["target_document_number"] == "73/2019/NĐ-CP"
+
+
+def test_long_appendix_with_reference_phrases_does_not_block_export():
+    raw_text = "\n".join(
+        [
+            "PHỤ LỤC 01",
+            "KẾ HOẠCH DỊCH CHUYỂN, TÍCH HỢP CÁC HỆ THỐNG CNTT",
+            "STT",
+            "Tên hệ thống",
+            "Đơn vị chủ trì",
+            "Ghi chú",
+            "1",
+            "CSDL quốc gia",
+            "Cục CNTT",
+            "Hệ thống chuyển lên TTDLQG theo Phụ lục kế hoạch và theo Công văn hướng dẫn.",
+            "2",
+            "CSDL chuyên ngành",
+            "Đơn vị nghiệp vụ",
+            "Nội dung bảng dữ liệu là phụ lục thật, không phải dòng dẫn chiếu.",
+        ]
+    )
+    parsed = make_parsed(
+        raw_text,
+        articles=[],
+        appendices=[Appendix(number="01", title="Kế hoạch dịch chuyển", raw_content=raw_text)],
+    )
+
+    asset = build_legal_knowledge_asset(parsed)
+    markdown = render_gpt_knowledge_from_asset(asset)
+
+    assert asset.validation["status"] == "PASS"
+    assert asset.stats["appendix_count"] == 1
+    assert "PHỤ LỤC 01" in markdown

@@ -525,7 +525,7 @@ def validate_asset(nodes: list[AssetNode], expected_issued: bool = False) -> Ass
         pass
 
     for appendix in [node for node in nodes if node.node_type == "APPENDIX"]:
-        if re.search(r"\b(theo|tại|hướng dẫn tại)\s+Phụ\s+lục", appendix.original_text, flags=re.IGNORECASE):
+        if is_reference_only_appendix(appendix):
             warnings.append(error("KB-APP-002", f"Phụ lục {appendix.id} có dấu hiệu chứa dẫn chiếu cần review."))
 
     main_numbers = {node.number for node in nodes if node.node_type == "PROVISION" and node.scope_type == "MAIN_DOCUMENT"}
@@ -550,6 +550,16 @@ def duplicate_keys(values: list[tuple[object, ...]]) -> list[tuple[object, ...]]
             duplicates.append(value)
         seen.add(value)
     return duplicates
+
+
+def is_reference_only_appendix(node: AssetNode) -> bool:
+    lines = [line.strip() for line in node.original_text.splitlines() if line.strip()]
+    if len(lines) > 8:
+        return False
+    text = normalize_node_text(node.original_text)
+    if len(text) > 800:
+        return False
+    return bool(re.search(r"\b(theo|tại|hướng dẫn tại)\s+Phụ\s+lục\b", text, flags=re.IGNORECASE))
 
 
 def asset_stats(nodes: list[AssetNode]) -> dict[str, int]:
