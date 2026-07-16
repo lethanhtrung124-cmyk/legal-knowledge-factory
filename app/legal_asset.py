@@ -933,6 +933,19 @@ def build_semantic_entities(
                 aliases=[abbr] if abbr else [],
                 review_status="PASS",
             )
+        for actor in extract_legal_actors(node.original_text):
+            add_entity(
+                entities,
+                entity_id=f"ENT-ACTOR-{canonical_id(actor).upper()}",
+                canonical_name=canonical_id(actor),
+                display_name=actor,
+                entity_type="LEGAL_ACTOR",
+                definition="Chủ thể pháp lý được nêu trực tiếp trong điều khoản.",
+                definition_node_id=node.id,
+                mentioned_node_ids=nodes_mentioning(asset.nodes, actor),
+                aliases=[],
+                review_status="PASS",
+            )
     for keyword in keywords:
         if not is_entity_keyword(keyword):
             continue
@@ -954,19 +967,6 @@ def build_semantic_entities(
             aliases=[str(alias) for alias in keyword.get("aliases", [])],
             review_status="PASS",
         )
-        for actor in extract_legal_actors(node.original_text):
-            add_entity(
-                entities,
-                entity_id=f"ENT-ACTOR-{canonical_id(actor).upper()}",
-                canonical_name=canonical_id(actor),
-                display_name=actor,
-                entity_type="LEGAL_ACTOR",
-                definition="Chủ thể pháp lý được nêu trực tiếp trong điều khoản.",
-                definition_node_id=node.id,
-                mentioned_node_ids=nodes_mentioning(asset.nodes, actor),
-                aliases=[],
-                review_status="PASS",
-            )
     for reference in legal_references:
         display_name = str(reference.get("canonical_reference", "")).strip()
         if not display_name:
@@ -988,7 +988,7 @@ def build_semantic_entities(
             entity_id = f"ENT-{variable}"
             mentioned = set(entities.get(entity_id, {}).get("mentioned_node_ids", []))
             mentioned.update(str(node_id) for node_id in formula.get("supporting_node_ids", [formula["supporting_node_id"]]))
-            definition_node_id, definition = find_variable_definition(asset.nodes, variable, list(mentioned))
+            definition_node_id, definition = formula_variable_definition(asset.nodes, variable, list(mentioned))
             add_entity(
                 entities,
                 entity_id=entity_id,
@@ -1003,6 +1003,29 @@ def build_semantic_entities(
                 review_status="PASS" if definition else "NEEDS_REVIEW",
             )
             entities[entity_id]["mentioned_node_ids"] = sorted(set(entities[entity_id]["mentioned_node_ids"]) | mentioned)
+            entities[entity_id]["related_formula_ids"] = sorted(
+                set(entities[entity_id].get("related_formula_ids", [])) | {str(formula.get("formula_id"))}
+            )
+            entities[entity_id]["semantic_role"] = "RESULT_VARIABLE" if variable == formula["result_variable"] else "INPUT_VARIABLE"
+    if formulas:
+        default_node_id = str(formulas[0].get("supporting_node_id") or asset.root_id)
+        for variable, definition in FORMULA_VARIABLE_DEFINITIONS.items():
+            entity_id = f"ENT-{variable}"
+            mentioned = nodes_mentioning(asset.nodes, variable)
+            add_entity(
+                entities,
+                entity_id=entity_id,
+                canonical_name=variable.lower(),
+                display_name=variable,
+                abbreviation=variable,
+                entity_type="FORMULA_VARIABLE",
+                definition=definition,
+                definition_node_id=mentioned[0] if mentioned else default_node_id,
+                mentioned_node_ids=mentioned or [default_node_id],
+                aliases=[],
+                review_status="PASS",
+            )
+            entities[entity_id]["semantic_role"] = entities[entity_id].get("semantic_role", "FORMULA_DICTIONARY_VARIABLE")
     return sorted(entities.values(), key=lambda item: item["entity_id"])
 
 
@@ -1264,6 +1287,8 @@ def validate_semantic_data(asset: LegalKnowledgeAsset) -> dict[str, object]:
     for appendix in appendix_metadata:
         if not appendix.get("official_title"):
             errors.append(error("KB-SEM-APP", f"Appendix metadata thiếu official_title: {appendix.get('appendix_id')}"))
+    for graph_error in semantic_graph_errors(asset, build_semantic_graph_edges(asset)):
+        errors.append(error("KB-SEM-GRAPH", graph_error))
     return {"errors": errors, "warnings": warnings, "report": build_semantic_validation_report(asset, errors, warnings)}
 
 
@@ -1287,6 +1312,7 @@ def build_semantic_validation_report(
     cross_references = asset.semantic.get("cross_references", [])
     legal_references = asset.semantic.get("legal_references", [])
     keywords = asset.semantic.get("keywords", [])
+    structure_validation = validate_structure_for_export(asset)
     entity_types: dict[str, int] = {}
     for entity in entities:
         entity_type = str(entity.get("entity_type", "UNKNOWN"))
@@ -1317,7 +1343,30 @@ def build_semantic_validation_report(
             if f"ENT-CONCEPT-{str(keyword.get('canonical_term')).upper()}" not in {str(entity.get("entity_id")) for entity in entities}
         ],
     }
+    graph_edges = build_semantic_graph_edges(asset)
+    graph_errors = semantic_graph_errors(asset, graph_edges)
     checks = [
+        {
+            "check_id": "KB-VAL-STRUCT-001",
+            "name": "Cấu trúc Legal Knowledge Asset",
+            "status": "FAIL" if structure_validation["status"] == "FAIL" else "PASS",
+            "evidence": {
+                "stats": asset.stats,
+                "structure_validation": structure_validation,
+            },
+        },
+        {
+            "check_id": "KB-VAL-FORMULA-001",
+            "name": "Công thức và biến công thức",
+            "status": "FAIL" if any(item["code"] == "KB-SEM-FORMULA" for item in errors) else "PASS",
+            "evidence": {"formula_count": len(formulas), "formula_support": formula_support},
+        },
+        {
+            "check_id": "KB-VAL-REF-001",
+            "name": "Tham chiếu nội bộ và văn bản viện dẫn",
+            "status": "FAIL" if any(item["code"] in {"KB-SEM-XREF", "KB-SEM-LREF"} for item in errors) else "PASS",
+            "evidence": {"cross_reference_count": len(cross_references), "legal_reference_count": len(legal_references)},
+        },
         {
             "check_id": "KB-SEM-ENT-001",
             "name": "Entity pháp lý và biến công thức",
@@ -1325,29 +1374,27 @@ def build_semantic_validation_report(
             "evidence": {"entity_count": len(entities), "entity_types": entity_types, "keyword_coverage": keyword_coverage},
         },
         {
-            "check_id": "KB-SEM-FORM-001",
-            "name": "Canonical formula và supporting node",
-            "status": "FAIL" if any(item["code"] == "KB-SEM-FORMULA" for item in errors) else "PASS",
-            "evidence": {"formula_count": len(formulas), "formula_support": formula_support},
-        },
-        {
-            "check_id": "KB-SEM-XREF-001",
-            "name": "Cross-reference deduplication",
-            "status": "FAIL" if any(item["code"] == "KB-SEM-XREF" for item in errors) else "PASS",
-            "evidence": {"cross_reference_count": len(cross_references)},
-        },
-        {
-            "check_id": "KB-SEM-LREF-001",
-            "name": "Legal reference canonicalization",
-            "status": "FAIL" if any(item["code"] == "KB-SEM-LREF" for item in errors) else "PASS",
-            "evidence": {"legal_reference_count": len(legal_references)},
+            "check_id": "KB-VAL-GRAPH-001",
+            "name": "Semantic graph",
+            "status": "FAIL" if graph_errors else "PASS",
+            "evidence": {
+                "node_count": len(asset.nodes),
+                "entity_count": len(entities),
+                "edge_count": len(graph_edges),
+                "graph_errors": graph_errors,
+            },
         },
     ]
     return {
-        "status": "FAIL" if errors else "WARNING" if warnings else "PASS",
+        "status": "FAIL" if errors or graph_errors or structure_validation["status"] == "FAIL" else "WARNING" if warnings else "PASS",
         "asset_id": asset.root_id,
         "document_number": asset.document_number,
         "checks": checks,
+        "semantic_graph": {
+            "edges": graph_edges,
+            "edge_count": len(graph_edges),
+            "errors": graph_errors,
+        },
         "metrics": {
             "entity_count": len(entities),
             "formula_count": len(formulas),
@@ -1355,12 +1402,66 @@ def build_semantic_validation_report(
             "legal_reference_count": len(legal_references),
             "important_keyword_count": len(important_keywords),
             "covered_keyword_entity_count": len(covered_keyword_entities),
+            "semantic_graph_edge_count": len(graph_edges),
             "error_count": len(errors),
             "warning_count": len(warnings),
         },
         "errors": errors,
         "warnings": warnings,
     }
+
+
+def build_semantic_graph_edges(asset: LegalKnowledgeAsset) -> list[dict[str, str]]:
+    edges: list[dict[str, str]] = []
+    for entity in asset.semantic.get("entities", []):
+        entity_id = str(entity.get("entity_id", ""))
+        definition_node_id = str(entity.get("definition_node_id", ""))
+        if entity_id and definition_node_id:
+            edges.append({"source": entity_id, "target": definition_node_id, "relation": "DEFINED_IN"})
+        for node_id in entity.get("mentioned_node_ids", []):
+            edges.append({"source": entity_id, "target": str(node_id), "relation": "MENTIONED_IN"})
+        for formula_id in entity.get("related_formula_ids", []):
+            edges.append({"source": entity_id, "target": str(formula_id), "relation": "VARIABLE_OF"})
+    for formula in asset.semantic.get("formulas", []):
+        formula_id = str(formula.get("formula_id", ""))
+        for node_id in formula.get("supporting_node_ids", []):
+            edges.append({"source": formula_id, "target": str(node_id), "relation": "DEFINED_IN"})
+        for variable in [formula.get("result_variable"), *formula.get("input_variables", [])]:
+            edges.append({"source": formula_id, "target": f"ENT-{variable}", "relation": "USES_VARIABLE"})
+    for reference in asset.semantic.get("cross_references", []):
+        edges.append(
+            {
+                "source": str(reference.get("source_node_id", "")),
+                "target": str(reference.get("target_node_id", "")),
+                "relation": "REFERENCES_APPENDIX",
+            }
+        )
+    for reference in asset.semantic.get("legal_references", []):
+        edges.append(
+            {
+                "source": str(reference.get("source_node_id", "")),
+                "target": f"ENT-DOC-{canonical_id(str(reference.get('canonical_reference', ''))).upper()}",
+                "relation": "CITES_LEGAL_DOCUMENT",
+            }
+        )
+    unique: dict[tuple[str, str, str], dict[str, str]] = {}
+    for edge in edges:
+        if edge["source"] and edge["target"]:
+            unique[(edge["source"], edge["target"], edge["relation"])] = edge
+    return sorted(unique.values(), key=lambda item: (item["source"], item["relation"], item["target"]))
+
+
+def semantic_graph_errors(asset: LegalKnowledgeAsset, edges: list[dict[str, str]]) -> list[str]:
+    valid_ids = {node.id for node in asset.nodes}
+    valid_ids.update(str(entity.get("entity_id")) for entity in asset.semantic.get("entities", []))
+    valid_ids.update(str(formula.get("formula_id")) for formula in asset.semantic.get("formulas", []))
+    errors: list[str] = []
+    for edge in edges:
+        if edge["source"] not in valid_ids:
+            errors.append(f"Unknown graph source: {edge['source']}")
+        if edge["target"] not in valid_ids:
+            errors.append(f"Unknown graph target: {edge['target']}")
+    return sorted(set(errors))
 
 
 def add_entity(
@@ -1431,13 +1532,59 @@ LEGAL_ACTOR_PATTERNS = (
 ENTITY_KEYWORD_TYPES = {"LEGAL_TERM", "TECHNICAL_TERM", "PROCEDURE"}
 
 
+FORMULA_VARIABLE_DEFINITIONS = {
+    "G": "Chi phí xây dựng, phát triển, mở rộng phần mềm nội bộ trước thuế giá trị gia tăng.",
+    "E": "Giá trị nỗ lực thực tế để xây dựng, phát triển, mở rộng phần mềm nội bộ.",
+    "P": "Thời gian lao động để thực hiện một điểm trường hợp sử dụng sau hiệu chỉnh.",
+    "H": "Mức lương lao động bình quân.",
+    "AUCP": "Điểm trường hợp sử dụng sau hiệu chỉnh, được xác định từ UUCP, TCF và EF.",
+    "UUCP": "Điểm trường hợp sử dụng trước hiệu chỉnh, bằng tổng TAW và TBF.",
+    "TAW": "Giá trị điểm các tác nhân tương tác, trao đổi thông tin với phần mềm nội bộ.",
+    "TBF": "Giá trị điểm các trường hợp sử dụng.",
+    "TCF": "Hệ số phức tạp kỹ thuật - công nghệ.",
+    "TFW": "Tổng giá trị xếp hạng các hệ số kỹ thuật - công nghệ.",
+    "EF": "Hệ số tác động môi trường và nhóm làm việc.",
+    "EFW": "Tổng giá trị xếp hạng các hệ số tác động môi trường và nhóm làm việc.",
+    "GPM": "Giá trị phần mềm nội bộ hoặc giá trị phần mềm được xác định theo phương pháp tính chi phí tương ứng trong văn bản.",
+}
+
+
 def is_entity_keyword(keyword: dict[str, object]) -> bool:
     term = str(keyword.get("display_term") or "")
     if not term or len(term) < 3:
         return False
     if str(keyword.get("keyword_type")) not in ENTITY_KEYWORD_TYPES:
         return False
-    return valid_keyword(term)
+    return valid_keyword(term) and is_real_legal_concept(term)
+
+
+NON_CONCEPT_MARKERS = (
+    "bảng này",
+    "thực hiện bằng cách",
+    "căn cứ vào",
+    "căn cứ theo",
+    "được thực hiện",
+    "được xác định",
+    "việc xác định",
+    "các nội dung",
+    "quy định tại",
+    "theo phụ lục",
+    "theo hướng dẫn",
+    "lập bảng",
+)
+
+
+def is_real_legal_concept(term: str) -> bool:
+    normalized = re.sub(r"\s+", " ", term).strip(" .;:").lower()
+    if not normalized:
+        return False
+    if any(marker in normalized for marker in NON_CONCEPT_MARKERS):
+        return False
+    if len(normalized.split()) > 10 and not any(anchor in normalized for anchor in ("chi phí phần mềm nội bộ", "hệ số", "trường hợp sử dụng")):
+        return False
+    if re.search(r"\b(phải|được|thực hiện|xác định|lập|tính)\b", normalized) and len(normalized.split()) > 6:
+        return False
+    return True
 
 
 def entity_type_from_keyword(keyword: dict[str, object]) -> str:
@@ -1477,6 +1624,14 @@ def find_variable_definition(nodes: list[AssetNode], variable: str, preferred_no
                 if match:
                     return node.id, match.group("definition").strip(" .;:")
     return "", ""
+
+
+def formula_variable_definition(nodes: list[AssetNode], variable: str, preferred_node_ids: list[str]) -> tuple[str, str]:
+    node_id, original_definition = find_variable_definition(nodes, variable, preferred_node_ids)
+    dictionary_definition = FORMULA_VARIABLE_DEFINITIONS.get(variable)
+    if dictionary_definition:
+        return node_id or (preferred_node_ids[0] if preferred_node_ids else ""), dictionary_definition
+    return node_id, original_definition
 
 
 def select_formula_supporting_nodes(asset: LegalKnowledgeAsset, formula: dict[str, object], candidate_node_ids: list[str]) -> list[str]:
