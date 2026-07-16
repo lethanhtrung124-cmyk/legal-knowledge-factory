@@ -271,3 +271,37 @@ def test_semantic_layer_exports_json_and_markdown_sections(tmp_path):
     assert "## Công thức" in markdown
     assert "## Trình tự thực hiện" in markdown
     assert "| node_id | scope_type | title | topics | canonical_keywords | formulas | references |" in markdown
+
+
+def test_semantic_engine_canonicalizes_and_deduplicates_core_indexes():
+    raw_text = "\n".join(
+        [
+            "Điều 1. Ban hành kèm theo Quyết định này Hướng dẫn xác định chi phí phần mềm nội bộ.",
+            "Điều 2. Hiệu lực thi hành",
+            "Điều 3. Tổ chức thực hiện",
+            "KT. BỘ TRƯỞNG",
+            "HƯỚNG DẪN XÁC ĐỊNH CHI PHÍ PHẦN MỀM NỘI BỘ",
+            "(Ban hành kèm theo Quyết định số 671/QĐ-BTTTT)",
+            "Điều 1. Nội dung viện dẫn",
+            "1. Thực hiện theo Phụ lục I, Phụ lục I và Nghị định số 73/2019/NĐ-CP.",
+            "2. Căn cứ Nghị định 73/2019/NĐ-CP để áp dụng phương pháp.",
+            "PHỤ LỤC I",
+            "CÔNG THỨC XÁC ĐỊNH CHI PHÍ",
+            "G = 1,4 x E x P x H",
+            "G=1,4×E×P×H",
+        ]
+    )
+    parsed = make_parsed(raw_text)
+
+    asset = build_legal_knowledge_asset(parsed)
+    formulas = asset.semantic["formulas"]
+    xrefs = asset.semantic["cross_references"]
+    legal_refs = asset.semantic["legal_references"]
+
+    assert asset.validation["status"] == "PASS"
+    assert [formula["expression"] for formula in formulas] == ["G = 1,4 x E x P x H"]
+    assert formulas[0]["supporting_node_ids"]
+    assert len(xrefs) == 1
+    assert len(legal_refs) == 1
+    assert legal_refs[0]["target_document_type"] == "Nghị định"
+    assert legal_refs[0]["target_document_number"] == "73/2019/NĐ-CP"

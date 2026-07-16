@@ -784,8 +784,8 @@ FORMULA_RE = re.compile(r"\b(?P<result>[A-Z]{1,5})\s*=\s*(?P<body>[0-9A-Z,.\s+\-
 def build_semantic_data(asset: LegalKnowledgeAsset) -> dict[str, object]:
     topics = build_semantic_topics(asset)
     keywords = build_semantic_keywords(asset)
-    entities = build_semantic_entities(asset)
     formulas = build_semantic_formulas(asset)
+    entities = build_semantic_entities(asset, formulas)
     procedures = build_semantic_procedures(asset)
     appendix_metadata = build_appendix_metadata(asset, keywords, formulas)
     cross_references = build_cross_references(asset)
@@ -869,7 +869,7 @@ def build_semantic_keywords(asset: LegalKnowledgeAsset) -> list[dict[str, object
     return sorted(output, key=lambda item: item["canonical_term"])
 
 
-def build_semantic_entities(asset: LegalKnowledgeAsset) -> list[dict[str, object]]:
+def build_semantic_entities(asset: LegalKnowledgeAsset, formulas: list[dict[str, object]]) -> list[dict[str, object]]:
     entities: dict[str, dict[str, object]] = {}
     for node in asset.nodes:
         if node.node_type != "PROVISION":
@@ -896,9 +896,11 @@ def build_semantic_entities(asset: LegalKnowledgeAsset) -> list[dict[str, object
                 "aliases": [abbr] if abbr else [],
                 "review_status": "PASS",
             }
-    for formula in build_semantic_formulas(asset):
+    for formula in formulas:
         for variable in [formula["result_variable"], *formula["input_variables"]]:
             entity_id = f"ENT-{variable}"
+            mentioned = set(entities.get(entity_id, {}).get("mentioned_node_ids", []))
+            mentioned.update(str(node_id) for node_id in formula.get("supporting_node_ids", [formula["supporting_node_id"]]))
             entities.setdefault(
                 entity_id,
                 {
@@ -909,43 +911,52 @@ def build_semantic_entities(asset: LegalKnowledgeAsset) -> list[dict[str, object
                     "entity_type": "VARIABLE",
                     "definition": "",
                     "definition_node_id": formula["supporting_node_id"],
-                    "mentioned_node_ids": [formula["supporting_node_id"]],
+                    "mentioned_node_ids": sorted(mentioned),
                     "aliases": [],
                     "review_status": "NEEDS_REVIEW",
                 },
             )
+            entities[entity_id]["mentioned_node_ids"] = sorted(set(entities[entity_id]["mentioned_node_ids"]) | mentioned)
     return sorted(entities.values(), key=lambda item: item["entity_id"])
 
 
 def build_semantic_formulas(asset: LegalKnowledgeAsset) -> list[dict[str, object]]:
-    formulas: list[dict[str, object]] = []
-    seen: set[tuple[str, str]] = set()
+    formulas: dict[str, dict[str, object]] = {}
     for node in asset.nodes:
         for line in node.original_text.splitlines():
             for match in FORMULA_RE.finditer(line):
-                expression = match.group(0).strip(" .;:")
-                if not formula_like(expression):
+                original_expression = match.group(0).strip(" .;:")
+                if not formula_like(original_expression):
                     continue
                 result = match.group("result")
-                key = (node.id, expression)
-                if key in seen:
-                    continue
-                seen.add(key)
-                inputs = [token for token in re.findall(r"\b[A-Z]{1,5}\b", match.group("body")) if token != result]
-                formulas.append(
+                canonical_expression = canonical_formula_expression(original_expression)
+                key = canonical_formula_key(canonical_expression)
+                inputs = [token for token in re.findall(r"\b[A-Z]{1,5}\b", canonical_expression) if token != result]
+                entry = formulas.setdefault(
+                    key,
                     {
-                        "formula_id": f"{asset.root_id}-FORMULA-{result}-{len(formulas)+1:02d}",
-                        "expression": expression,
-                        "display_expression": expression,
+                        "formula_id": "",
+                        "expression": canonical_expression,
+                        "display_expression": original_expression,
                         "result_variable": result,
                         "input_variables": sorted(set(inputs)),
                         "supporting_node_id": node.id,
-                        "formula_type": "COST_FORMULA" if any(var in expression for var in ("G", "AUCP", "UUCP", "TCF", "EF")) else "FORMULA",
+                        "supporting_node_ids": [],
+                        "formula_type": "COST_FORMULA" if any(var in canonical_expression for var in ("G", "AUCP", "UUCP", "TCF", "EF")) else "FORMULA",
                         "original_text": line,
+                        "original_expressions": [],
                         "review_status": "VALIDATED",
-                    }
+                    },
                 )
-    return formulas
+                if node.id not in entry["supporting_node_ids"]:
+                    entry["supporting_node_ids"].append(node.id)
+                if original_expression not in entry["original_expressions"]:
+                    entry["original_expressions"].append(original_expression)
+    output = sorted(formulas.values(), key=lambda item: (str(item["result_variable"]), str(item["expression"])))
+    for index, formula in enumerate(output, start=1):
+        formula["formula_id"] = f"{asset.root_id}-FORMULA-{formula['result_variable']}-{index:02d}"
+        formula["supporting_node_ids"] = sorted(formula["supporting_node_ids"])
+    return output
 
 
 def build_semantic_procedures(asset: LegalKnowledgeAsset) -> list[dict[str, object]]:
@@ -977,6 +988,7 @@ def build_cross_references(asset: LegalKnowledgeAsset) -> list[dict[str, object]
         if node.node_type == "APPENDIX" and node.canonical_number
     }
     references: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
     for node in asset.nodes:
         if node.node_type != "PROVISION":
             continue
@@ -985,12 +997,17 @@ def build_cross_references(asset: LegalKnowledgeAsset) -> list[dict[str, object]
             target = appendix_by_number.get(canonical)
             if not target:
                 continue
+            dedupe_key = (node.id, target)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
             references.append(
                 {
                     "reference_id": f"{asset.root_id}-XREF-{len(references)+1:03d}",
                     "source_node_id": node.id,
                     "relation_type": "REFERENCES",
                     "target_node_id": target,
+                    "target_canonical_number": canonical,
                     "reference_text": match.group(0),
                     "source_location": {},
                     "review_status": "PASS",
@@ -1001,24 +1018,42 @@ def build_cross_references(asset: LegalKnowledgeAsset) -> list[dict[str, object]
 
 def build_legal_references(asset: LegalKnowledgeAsset) -> list[dict[str, object]]:
     refs: list[dict[str, object]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
     for node in asset.nodes:
-        if node.node_type not in {"PROVISION", "MAIN_DOCUMENT", "ISSUED_CONTENT"}:
+        scan_items: list[tuple[str, str]] = []
+        if node.node_type == "MAIN_DOCUMENT":
+            scan_items = [(str(item), "LEGAL_BASIS") for item in node.metadata.get("legal_basis", [])]
+        elif node.node_type in {"PROVISION", "APPENDIX", "FORM"}:
+            scan_items = [(node.original_text, "METHOD_REFERENCE")]
+        else:
             continue
-        for match in LEGAL_REFERENCE_RE.finditer(node.original_text):
-            refs.append(
-                {
-                    "legal_reference_id": f"{asset.root_id}-LREF-{len(refs)+1:03d}",
-                    "source_node_id": node.id,
-                    "target_document_number": match.group("number"),
-                    "target_article": extract_nearby_reference_part(node.original_text, match.start(), "Điều"),
-                    "target_clause": extract_nearby_reference_part(node.original_text, match.start(), "khoản"),
-                    "target_point": extract_nearby_reference_part(node.original_text, match.start(), "điểm"),
-                    "reference_type": "LEGAL_BASIS" if node.node_type == "MAIN_DOCUMENT" else "METHOD_REFERENCE",
-                    "original_reference_text": match.group(0),
-                    "target_asset_id": "",
-                    "resolution_status": "UNRESOLVED",
-                }
-            )
+        for source_text, reference_type in scan_items:
+            for match in LEGAL_REFERENCE_RE.finditer(source_text):
+                document_type = canonical_legal_document_type(match.group("kind"))
+                document_number = canonical_legal_document_number(match.group("number"))
+                target_article = extract_nearby_reference_part(source_text, match.start(), "Điều")
+                target_clause = extract_nearby_reference_part(source_text, match.start(), "khoản")
+                target_point = extract_nearby_reference_part(source_text, match.start(), "điểm")
+                dedupe_key = (node.id, document_type, document_number, "", "")
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                refs.append(
+                    {
+                        "legal_reference_id": f"{asset.root_id}-LREF-{len(refs)+1:03d}",
+                        "source_node_id": node.id,
+                        "target_document_type": document_type,
+                        "target_document_number": document_number,
+                        "canonical_reference": f"{document_type} {document_number}",
+                        "target_article": target_article,
+                        "target_clause": target_clause,
+                        "target_point": target_point,
+                        "reference_type": reference_type,
+                        "original_reference_text": match.group(0),
+                        "target_asset_id": "",
+                        "resolution_status": "UNRESOLVED",
+                    }
+                )
     return refs
 
 
@@ -1029,7 +1064,8 @@ def build_appendix_metadata(asset: LegalKnowledgeAsset, keywords: list[dict[str,
             keyword_by_node.setdefault(node_id, []).append(keyword["display_term"])
     formula_by_node: dict[str, list[str]] = {}
     for formula in formulas:
-        formula_by_node.setdefault(formula["supporting_node_id"], []).append(formula["formula_id"])
+        for node_id in formula.get("supporting_node_ids", [formula["supporting_node_id"]]):
+            formula_by_node.setdefault(str(node_id), []).append(formula["formula_id"])
     return [
         {
             "appendix_id": node.id,
@@ -1076,10 +1112,21 @@ def validate_semantic_data(asset: LegalKnowledgeAsset) -> dict[str, list[dict[st
         if entity.get("definition_node_id") not in node_ids:
             errors.append(error("KB-SEM-ENTITY", f"Entity thiếu supporting node: {entity.get('entity_id')}"))
     node_by_id = {node.id: node for node in asset.nodes}
+    formula_keys: list[str] = []
     for formula in formulas:
-        node = node_by_id.get(str(formula.get("supporting_node_id")))
-        if not node or str(formula.get("display_expression")) not in node.original_text:
+        expression = str(formula.get("expression", ""))
+        if expression != canonical_formula_expression(expression):
+            errors.append(error("KB-SEM-FORMULA", f"Công thức chưa được canonical: {formula.get('formula_id')}"))
+        formula_keys.append(canonical_formula_key(expression))
+        supporting_node_ids = [str(item) for item in formula.get("supporting_node_ids", [formula.get("supporting_node_id")])]
+        if not supporting_node_ids or any(node_id not in node_ids for node_id in supporting_node_ids):
+            errors.append(error("KB-SEM-FORMULA", f"Công thức trỏ sai supporting node: {formula.get('formula_id')}"))
+            continue
+        original_expressions = [str(item) for item in formula.get("original_expressions", [formula.get("display_expression", "")])]
+        if not any(original and original in node_by_id[node_id].original_text for node_id in supporting_node_ids for original in original_expressions):
             errors.append(error("KB-SEM-FORMULA", f"Công thức không khớp original_text: {formula.get('formula_id')}"))
+    if duplicate_values(formula_keys):
+        errors.append(error("KB-SEM-FORMULA", "Công thức canonical bị trùng."))
     for procedure in procedures:
         node = node_by_id.get(str(procedure.get("supporting_node_id")))
         if not node:
@@ -1088,12 +1135,33 @@ def validate_semantic_data(asset: LegalKnowledgeAsset) -> dict[str, list[dict[st
         for step in procedure.get("steps", []):
             if step.get("original_text") not in node.original_text:
                 errors.append(error("KB-SEM-PROCEDURE", f"Procedure mất bước: {procedure.get('procedure_id')}"))
+    xref_keys: list[str] = []
     for reference in cross_references:
         if reference.get("source_node_id") not in node_ids or reference.get("target_node_id") not in node_ids:
             errors.append(error("KB-SEM-XREF", f"Cross reference trỏ sai node: {reference.get('reference_id')}"))
+        xref_keys.append(f"{reference.get('source_node_id')}->{reference.get('target_node_id')}")
+    if duplicate_values(xref_keys):
+        errors.append(error("KB-SEM-XREF", "Cross reference bị trùng source-target."))
+    legal_ref_keys: list[str] = []
     for legal_reference in legal_references:
         if not legal_reference.get("target_document_number") or legal_reference.get("source_node_id") not in node_ids:
             errors.append(error("KB-SEM-LREF", f"Legal reference không hợp lệ: {legal_reference.get('legal_reference_id')}"))
+            continue
+        if legal_reference.get("target_document_number") != canonical_legal_document_number(str(legal_reference.get("target_document_number"))):
+            errors.append(error("KB-SEM-LREF", f"Legal reference chưa canonical: {legal_reference.get('legal_reference_id')}"))
+        legal_ref_keys.append(
+            "|".join(
+                [
+                    str(legal_reference.get("source_node_id")),
+                    str(legal_reference.get("canonical_reference")),
+                    str(legal_reference.get("target_article")),
+                    str(legal_reference.get("target_clause")),
+                    str(legal_reference.get("target_point")),
+                ]
+            )
+        )
+    if duplicate_values(legal_ref_keys):
+        errors.append(error("KB-SEM-LREF", "Legal reference canonical bị trùng."))
     for appendix in appendix_metadata:
         if not appendix.get("official_title"):
             errors.append(error("KB-SEM-APP", f"Appendix metadata thiếu official_title: {appendix.get('appendix_id')}"))
@@ -1182,6 +1250,25 @@ def formula_like(expression: str) -> bool:
     return bool(re.search(r"\d|[A-Z]{2,}|[×x*/+\-]", expression))
 
 
+def canonical_formula_expression(expression: str) -> str:
+    normalized = expression.replace("×", "x")
+    normalized = re.sub(r"\s+", " ", normalized).strip(" .;:")
+    normalized = re.sub(r"\s*=\s*", " = ", normalized)
+    normalized = re.sub(r"\s*\+\s*", " + ", normalized)
+    normalized = re.sub(r"\s*-\s*", " - ", normalized)
+    normalized = re.sub(r"\s*[xX]\s*", " x ", normalized)
+    normalized = re.sub(r"\s*/\s*", "/", normalized)
+    normalized = re.sub(r"\(\s+", "(", normalized)
+    normalized = re.sub(r"\s+\)", ")", normalized)
+    normalized = re.sub(r"\+\s*\(-\s*([^)]+)\)", r"- \1", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def canonical_formula_key(expression: str) -> str:
+    return re.sub(r"\s+", "", canonical_formula_expression(expression)).upper()
+
+
 def extract_numbered_steps(text: str) -> list[dict[str, object]]:
     steps: list[dict[str, object]] = []
     current: dict[str, object] | None = None
@@ -1206,6 +1293,23 @@ def extract_nearby_reference_part(text: str, start: int, label: str) -> str:
     window = text[max(0, start - 90) : min(len(text), start + 90)]
     match = re.search(rf"{label}\s+([0-9a-zA-ZđĐ]+)", window, flags=re.IGNORECASE)
     return match.group(1) if match else ""
+
+
+def canonical_legal_document_type(kind: str) -> str:
+    normalized = re.sub(r"\s+", " ", kind.strip()).lower()
+    mapping = {
+        "luật": "Luật",
+        "nghị định": "Nghị định",
+        "thông tư": "Thông tư",
+        "quyết định": "Quyết định",
+    }
+    return mapping.get(normalized, kind.strip())
+
+
+def canonical_legal_document_number(number: str) -> str:
+    normalized = number.replace("–", "-").replace("—", "-").replace("\\", "/")
+    normalized = re.sub(r"\s+", "", normalized).strip(".,;:")
+    return normalized.upper()
 
 
 def appendix_official_title(node: AssetNode) -> str:
@@ -1334,7 +1438,8 @@ def render_asset_lookup(asset: LegalKnowledgeAsset) -> str:
             keywords_by_node.setdefault(str(node_id), []).append(str(keyword.get("canonical_term", "")))
     formulas_by_node: dict[str, list[str]] = {}
     for formula in asset.semantic.get("formulas", []):
-        formulas_by_node.setdefault(str(formula.get("supporting_node_id", "")), []).append(str(formula.get("formula_id", "")))
+        for node_id in formula.get("supporting_node_ids", [formula.get("supporting_node_id", "")]):
+            formulas_by_node.setdefault(str(node_id), []).append(str(formula.get("formula_id", "")))
     references_by_node: dict[str, list[str]] = {}
     for reference in asset.semantic.get("cross_references", []):
         references_by_node.setdefault(str(reference.get("source_node_id", "")), []).append(str(reference.get("target_node_id", "")))
