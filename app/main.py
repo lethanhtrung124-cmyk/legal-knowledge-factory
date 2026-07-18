@@ -402,7 +402,7 @@ INDEX_HTML = """
         const markdownUrl = response.headers.get("X-GPT-Safe-Knowledge-Url") || response.headers.get("X-GPT-Knowledge-Url");
         if (markdownUrl) {
           const markdownLink = document.createElement("a");
-          markdownLink.href = markdownUrl;
+          markdownLink.href = new URL(markdownUrl, response.url).href;
           markdownLink.download = `${baseName}_gpt_knowledge.md`;
           markdownLink.className = "download";
           markdownLink.textContent = "Tải file GPT Markdown";
