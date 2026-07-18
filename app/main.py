@@ -173,7 +173,7 @@ async def create_knowledge_pack(file: UploadFile = File(...)):
 
     download_name = f"{Path(original_name).stem}_knowledge_pack.zip"
     response = FileResponse(zip_path, media_type="application/zip", filename=download_name)
-    response.headers["X-GPT-Knowledge-Url"] = f"/api/knowledge-markdown/{quote(asset_outputs['gpt_markdown'].name)}"
+    response.headers["X-GPT-Knowledge-Url"] = f"/api/knowledge-markdown/{quote(asset_outputs['gpt_safe_markdown'].name)}"
     response.headers["X-GPT-Safe-Knowledge-Url"] = f"/api/knowledge-markdown/{quote(asset_outputs['gpt_safe_markdown'].name)}"
     response.headers["X-GPT-Instructions-Url"] = f"/api/legal-asset/{quote(asset_outputs['gpt_instructions'].name)}"
     response.headers["X-GPT-Safe-Validation-Json-Url"] = f"/api/legal-asset/{quote(asset_outputs['gpt_safe_validation_json'].name)}"
@@ -399,7 +399,7 @@ INDEX_HTML = """
         link.className = "download";
         link.textContent = "Tải file .zip";
         downloadArea.appendChild(link);
-        const markdownUrl = response.headers.get("X-GPT-Knowledge-Url");
+        const markdownUrl = response.headers.get("X-GPT-Safe-Knowledge-Url") || response.headers.get("X-GPT-Knowledge-Url");
         if (markdownUrl) {
           const markdownLink = document.createElement("a");
           markdownLink.href = markdownUrl;
@@ -407,32 +407,6 @@ INDEX_HTML = """
           markdownLink.className = "download";
           markdownLink.textContent = "Tải file GPT Markdown";
           downloadArea.appendChild(markdownLink);
-        }
-        const assetLinks = [
-          ["X-GPT-Safe-Knowledge-Url", "Tải GPT SAFE Markdown", `${baseName}_gpt_safe.md`],
-          ["X-GPT-Instructions-Url", "Tải GPT Instructions", `${baseName}_gpt_instructions.md`],
-          ["X-GPT-Safe-Validation-Json-Url", "Tải GPT SAFE Validation JSON", `${baseName}_gpt_safe_validation.json`],
-          ["X-GPT-Safe-Regression-Html-Url", "Tải GPT SAFE Regression HTML", `${baseName}_gpt_safe_regression.html`],
-          ["X-GPT-Safe-Regression-Summary-Url", "Tải GPT SAFE Regression Summary", `${baseName}_gpt_safe_regression.md`],
-          ["X-Legal-Asset-Json-Url", "Tải Legal Asset JSON", `${baseName}_legal_asset.json`],
-          ["X-Legal-Asset-Structure-Url", "Tải structure.json", `${baseName}_structure.json`],
-          ["X-Legal-Asset-Markdown-Url", "Tải Legal Asset Markdown", `${baseName}_legal_asset.md`],
-          ["X-Legal-Asset-Word-Url", "Tải Legal Asset Word", `${baseName}_legal_asset.docx`],
-          ["X-Legal-Asset-Migration-Url", "Tải Migration Report", `${baseName}_migration_report.md`],
-          ["X-Legal-Asset-Validation-Url", "Tải Asset Validation", `${baseName}_asset_validation.md`],
-          ["X-Legal-Asset-Semantic-Validation-Url", "Tải Semantic Validation", `${baseName}_semantic_validation.md`],
-          ["X-Legal-Asset-Regression-Url", "Tải Regression Summary", `${baseName}_regression_summary.md`],
-          ["X-Legal-Asset-Runtime-Log-Url", "Tải Runtime Log", `${baseName}_runtime.log`],
-        ];
-        for (const [header, label, downloadName] of assetLinks) {
-          const assetUrl = response.headers.get(header);
-          if (!assetUrl) continue;
-          const assetLink = document.createElement("a");
-          assetLink.href = assetUrl;
-          assetLink.download = downloadName;
-          assetLink.className = "download";
-          assetLink.textContent = label;
-          downloadArea.appendChild(assetLink);
         }
         statusBox.textContent = "Hoàn tất. Knowledge Pack đã sẵn sàng.";
       } catch (error) {
