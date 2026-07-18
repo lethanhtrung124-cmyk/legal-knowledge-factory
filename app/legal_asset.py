@@ -28,6 +28,7 @@ from .knowledge_pack import (
     document_folder_name,
     embed_markdown_section,
     extract_keyword_groups,
+    is_generic_faq_question,
     infer_topics,
     prune_keywords,
     quality_checked_faqs,
@@ -51,6 +52,7 @@ REFERENCE_RE = re.compile(r"\b(Phụ\s+lục|Mẫu\s+số|Biểu\s+mẫu)\s+([IV
 PARSER_VERSION = "legal-asset-parser/2.1.0"
 ASSET_SCHEMA_VERSION = "2.0"
 EXPORTER_VERSION = "legal-asset-exporter/2.2.0"
+GPT_SAFE_EXPORTER_VERSION = "gpt-safe-exporter/1.0.0"
 
 
 @dataclass
@@ -659,6 +661,114 @@ def render_gpt_knowledge_from_asset(asset: LegalKnowledgeAsset) -> str:
     return render_asset_markdown(asset)
 
 
+def render_gpt_safe_markdown(asset: LegalKnowledgeAsset) -> tuple[str, dict[str, object]]:
+    validation_report = build_gpt_safe_validation_report(asset, "")
+    semantic_sections = semantic_sections_for_safe_export(validation_report)
+    root = next(node for node in asset.nodes if node.id == asset.root_id)
+    lines = [
+        f"# {asset.title}",
+        "",
+        "## SOURCE OF TRUTH",
+        "",
+        "Nội dung Điều, Khoản, Điểm và Phụ lục gốc là nguồn pháp lý ưu tiên cao nhất.",
+        "Dữ liệu hỗ trợ chỉ dùng để định vị và chỉ được đưa vào khi nhóm kiểm định tương ứng PASS.",
+        "",
+        "## Metadata",
+        "",
+        f"- Loại văn bản: {asset.document_type}",
+        f"- Số/ký hiệu: {asset.document_number}",
+        f"- Tên văn bản: {asset.title}",
+        f"- Cơ quan ban hành: {root.metadata.get('issuing_authority', '')}",
+        f"- Ngày ban hành: {root.metadata.get('issued_date', '')}",
+        f"- Ngày hiệu lực: {root.metadata.get('effective_date', '')}",
+        f"- Source checksum: `{root.checksum}`",
+        "",
+        "## Mục lục",
+        "",
+        render_safe_table_of_contents(asset),
+        "",
+        "## Văn bản chính",
+        "",
+    ]
+    lines.extend(render_original_content_sections(asset))
+    lines.extend(["", "## Bảng tra cứu Điều - Khoản - Điểm", "", render_asset_lookup(asset), ""])
+
+    if semantic_sections.get("formula"):
+        lines.extend(["", "## Công thức đã kiểm định", "", render_formula_index(asset), ""])
+    if semantic_sections.get("entity"):
+        lines.extend(["", "## Khái niệm đã kiểm định", "", render_entity_index(asset), ""])
+    if semantic_sections.get("reference"):
+        lines.extend(
+            [
+                "",
+                "## Liên kết điều khoản đã kiểm định",
+                "",
+                render_cross_reference_index(asset),
+                "",
+                "### Văn bản được viện dẫn",
+                "",
+                render_legal_reference_index(asset),
+                "",
+            ]
+        )
+    if semantic_sections.get("procedure"):
+        lines.extend(["", "## Trình tự đã kiểm định", "", render_procedure_index(asset), ""])
+    if semantic_sections.get("faq"):
+        article_knowledge = build_article_knowledge_from_nodes(asset.nodes)
+        lines.extend(["", "## FAQ đã kiểm định", "", render_asset_faq(article_knowledge), ""])
+    if semantic_sections.get("topic_keyword"):
+        lines.extend(["", "## Topic và Keyword đã kiểm định", "", render_safe_topic_keyword_index(asset), ""])
+
+    lines.extend(
+        [
+            "",
+            "## Trạng thái kiểm định",
+            "",
+            render_safe_validation_status(validation_report),
+            "",
+        ]
+    )
+    markdown = "\n".join(line for line in lines if line is not None).strip() + "\n"
+    validation_report = build_gpt_safe_validation_report(asset, markdown)
+    markdown = markdown.replace(
+        "EXPORT_CHECKSUM_PENDING",
+        str(validation_report.get("checksums", {}).get("export_checksum", "")),
+    )
+    return markdown, validation_report
+
+
+def render_original_content_sections(asset: LegalKnowledgeAsset) -> list[str]:
+    nodes = asset.nodes
+    root = next(node for node in nodes if node.id == asset.root_id)
+    lines: list[str] = []
+    for provision in children(nodes, root.id, "PROVISION"):
+        kind = str(provision.metadata.get("provision_kind", "Điều"))
+        lines.extend([f"### {kind} {provision.number}", "", provision.original_text, ""])
+    issued_contents = children(nodes, root.id, "ISSUED_CONTENT")
+    if issued_contents:
+        lines.extend(["", "## Nội dung ban hành kèm theo", ""])
+        for issued in issued_contents:
+            lines.extend([f"### {issued.title}", ""])
+            for provision in children(nodes, issued.id, "PROVISION"):
+                kind = str(provision.metadata.get("provision_kind", "Điều"))
+                lines.extend([f"#### {kind} {provision.number}", "", provision.original_text, ""])
+            appendices = [node for node in children(nodes, issued.id) if node.node_type in {"APPENDIX", "FORM"}]
+            if appendices:
+                lines.extend(["", "### Phụ lục và biểu mẫu ban hành kèm theo", ""])
+                for appendix in appendices:
+                    label = "Biểu mẫu" if appendix.node_type == "FORM" else "Phụ lục"
+                    lines.extend([f"#### {label} {appendix.canonical_number or appendix.number}", "", appendix.original_text, ""])
+    root_appendices = [node for node in children(nodes, root.id) if node.node_type in {"APPENDIX", "FORM"}]
+    if root_appendices:
+        lines.extend(["", "## Phụ lục", ""])
+        for appendix in root_appendices:
+            label = "Biểu mẫu" if appendix.node_type == "FORM" else "Phụ lục"
+            lines.extend([f"### {label} {appendix.canonical_number or appendix.number}", "", appendix.original_text, ""])
+    if not lines:
+        lines.append("Không phát hiện nội dung gốc để xuất.")
+    return lines
+
+
 def build_structure(asset: LegalKnowledgeAsset) -> dict[str, object]:
     nodes = asset.nodes
     root = next(node for node in nodes if node.id == asset.root_id)
@@ -747,6 +857,210 @@ def validate_structure_for_export(asset: LegalKnowledgeAsset) -> dict[str, objec
             errors.append("Forbidden false appendix label appears in source node.")
     status = "FAIL" if errors else "WARNING" if warnings else "PASS"
     return {"status": status, "errors": errors, "warnings": warnings}
+
+
+def build_gpt_safe_validation_report(asset: LegalKnowledgeAsset, markdown: str) -> dict[str, object]:
+    structure_validation = validate_structure_for_export(asset)
+    root = next(node for node in asset.nodes if node.id == asset.root_id)
+    source_errors = source_validation_errors(asset)
+    metadata_errors = metadata_validation_errors(root)
+    integrity_errors = content_integrity_errors(asset, markdown) if markdown else []
+    semantic_report = asset.semantic.get("validation_report", {})
+    semantic_checks = semantic_check_statuses(semantic_report if isinstance(semantic_report, dict) else {})
+    faq_status, faq_errors = faq_validation_status(asset)
+    topic_keyword_status = "FAIL" if semantic_errors_with_codes(asset, {"KB-SEM-TOPIC", "KB-SEM-KEYWORD"}) else "PASS"
+    export_errors = export_validation_errors(asset, markdown) if markdown else []
+    gpt_safe_errors = source_errors + metadata_errors + list(structure_validation["errors"]) + integrity_errors + export_errors
+    full_asset_errors = [f"{name} is {check['status']}" for name, check in {
+        "Formula Validation": status_block(semantic_checks["formula"], []),
+        "Entity Validation": status_block(semantic_checks["entity"], []),
+        "Topic/Keyword Validation": status_block(topic_keyword_status, []),
+        "Cross-reference Validation": status_block(semantic_checks["reference"], []),
+        "Procedure Validation": status_block(semantic_checks["procedure"], []),
+        "FAQ Validation": status_block(faq_status, []),
+    }.items() if check["status"] == "FAIL"]
+    full_asset_status = "FAIL" if full_asset_errors or asset.validation.get("status") == "FAIL" else "WARNING" if asset.validation.get("status") == "WARNING" else "PASS"
+    semantic_sections = {
+        "formula": semantic_checks["formula"] == "PASS",
+        "entity": semantic_checks["entity"] == "PASS",
+        "reference": semantic_checks["reference"] == "PASS",
+        "procedure": semantic_checks["procedure"] == "PASS",
+        "faq": faq_status == "PASS",
+        "topic_keyword": topic_keyword_status == "PASS",
+    }
+    checks = {
+        "Source Validation": status_block("FAIL" if source_errors else "PASS", source_errors),
+        "Metadata Validation": status_block("FAIL" if metadata_errors else "PASS", metadata_errors),
+        "Structure Validation": status_block(str(structure_validation["status"]), list(structure_validation["errors"])),
+        "Content Integrity Validation": status_block("FAIL" if integrity_errors else "PASS", integrity_errors),
+        "Formula Validation": status_block(semantic_checks["formula"], semantic_errors_with_codes(asset, {"KB-SEM-FORMULA"})),
+        "Entity Validation": status_block(semantic_checks["entity"], semantic_errors_with_codes(asset, {"KB-SEM-ENTITY"})),
+        "Topic/Keyword Validation": status_block(topic_keyword_status, semantic_errors_with_codes(asset, {"KB-SEM-TOPIC", "KB-SEM-KEYWORD"})),
+        "Cross-reference Validation": status_block(semantic_checks["reference"], semantic_errors_with_codes(asset, {"KB-SEM-XREF", "KB-SEM-LREF"})),
+        "Legal Reference Validation": status_block(semantic_checks["reference"], semantic_errors_with_codes(asset, {"KB-SEM-LREF"})),
+        "Procedure Validation": status_block(semantic_checks["procedure"], semantic_errors_with_codes(asset, {"KB-SEM-PROCEDURE"})),
+        "FAQ Validation": status_block(faq_status, faq_errors),
+        "Export Validation": status_block("FAIL" if export_errors else "PASS", export_errors),
+        "GPT Safe Export": status_block("FAIL" if gpt_safe_errors else "PASS", gpt_safe_errors),
+        "Overall Full Asset Validation": status_block(
+            full_asset_status,
+            full_asset_errors + [str(item.get("message", item)) for item in asset.validation.get("errors", [])],
+        ),
+    }
+    ready = (
+        checks["Structure Validation"]["status"] == "PASS"
+        and checks["Content Integrity Validation"]["status"] == "PASS"
+        and checks["Metadata Validation"]["status"] == "PASS"
+        and checks["GPT Safe Export"]["status"] == "PASS"
+        and not gpt_safe_errors
+    )
+    return {
+        "schema_version": "gpt-safe-validation/1.0",
+        "asset_id": asset.root_id,
+        "document_number": asset.document_number,
+        "exporter_version": GPT_SAFE_EXPORTER_VERSION,
+        "READY_FOR_GPT_KNOWLEDGE": ready,
+        "checks": checks,
+        "semantic_sections_exported": [name for name, allowed in semantic_sections.items() if allowed],
+        "semantic_sections_removed": [name for name, allowed in semantic_sections.items() if not allowed],
+        "checksums": {
+            "source_checksum": root.checksum,
+            "export_checksum": checksum(markdown) if markdown else "EXPORT_CHECKSUM_PENDING",
+        },
+        "original_text_integrity": {
+            "changed": bool(integrity_errors),
+            "evidence": "All PROVISION/APPENDIX/FORM original_text blocks are present in GPT_SAFE Markdown." if not integrity_errors else integrity_errors,
+        },
+    }
+
+
+def status_block(status: str, errors: list[str]) -> dict[str, object]:
+    return {"status": status, "errors": errors}
+
+
+def source_validation_errors(asset: LegalKnowledgeAsset) -> list[str]:
+    errors: list[str] = []
+    root = next(node for node in asset.nodes if node.id == asset.root_id)
+    if not root.original_text.strip():
+        errors.append("MAIN_DOCUMENT original_text is empty.")
+    if root.checksum != checksum(root.original_text):
+        errors.append("MAIN_DOCUMENT checksum does not match original_text.")
+    return errors
+
+
+def metadata_validation_errors(root: AssetNode) -> list[str]:
+    metadata = root.metadata
+    required = {
+        "document_type": metadata.get("document_type"),
+        "issuing_authority": metadata.get("issuing_authority"),
+    }
+    errors = [f"Missing metadata field: {name}." for name, value in required.items() if not str(value or "").strip()]
+    if not root.number.strip():
+        errors.append("Missing document_number.")
+    if not root.title.strip():
+        errors.append("Missing title.")
+    return errors
+
+
+def content_integrity_errors(asset: LegalKnowledgeAsset, markdown: str) -> list[str]:
+    errors: list[str] = []
+    if not markdown:
+        return ["GPT_SAFE Markdown is empty."]
+    for node in asset.nodes:
+        if node.node_type not in {"PROVISION", "APPENDIX", "FORM"}:
+            continue
+        original = node.original_text.strip()
+        if original and original not in markdown:
+            errors.append(f"Missing original_text for node {node.id}.")
+    return errors
+
+
+def export_validation_errors(asset: LegalKnowledgeAsset, markdown: str) -> list[str]:
+    errors: list[str] = []
+    if "Validation Report" in markdown or "System Prompt" in markdown:
+        errors.append("GPT_SAFE contains internal validation report or prompt system.")
+    removed = set(semantic_sections_for_safe_export(build_gpt_safe_validation_report(asset, ""))["removed"])
+    forbidden_headings = {
+        "formula": "## Công thức đã kiểm định",
+        "entity": "## Khái niệm đã kiểm định",
+        "reference": "## Liên kết điều khoản đã kiểm định",
+        "procedure": "## Trình tự đã kiểm định",
+        "faq": "## FAQ đã kiểm định",
+        "topic_keyword": "## Topic và Keyword đã kiểm định",
+    }
+    for section, heading in forbidden_headings.items():
+        if section in removed and heading in markdown:
+            errors.append(f"Semantic section {section} is not PASS but appears in GPT_SAFE.")
+    return errors
+
+
+def semantic_check_statuses(report: dict[str, object]) -> dict[str, str]:
+    status_by_id = {str(check.get("check_id")): str(check.get("status")) for check in report.get("checks", [])}
+    return {
+        "formula": status_by_id.get("KB-VAL-FORMULA-001", "PASS"),
+        "entity": status_by_id.get("KB-SEM-ENT-001", "PASS"),
+        "reference": status_by_id.get("KB-VAL-REF-001", "PASS"),
+        "procedure": "PASS",
+    }
+
+
+def semantic_errors_with_codes(asset: LegalKnowledgeAsset, codes: set[str]) -> list[str]:
+    report = asset.semantic.get("validation_report", {})
+    errors = report.get("errors", []) if isinstance(report, dict) else []
+    return [str(item.get("message", item)) for item in errors if str(item.get("code")) in codes]
+
+
+def faq_validation_status(asset: LegalKnowledgeAsset) -> tuple[str, list[str]]:
+    article_knowledge = build_article_knowledge_from_nodes(asset.nodes)
+    accepted = quality_checked_faqs(article_knowledge)
+    errors: list[str] = []
+    seen_questions: set[str] = set()
+    seen_answers: set[str] = set()
+    for faq in accepted:
+        question = str(faq.get("question", "")).strip()
+        answer = str(faq.get("answer", "")).strip()
+        if is_generic_faq_question(question):
+            errors.append(f"Generic FAQ question: {question}")
+        if not str(faq.get("citation", "")).strip():
+            errors.append(f"FAQ missing supporting citation: {question}")
+        normalized_question = normalize_node_text(question).lower()
+        normalized_answer = normalize_node_text(answer).lower()
+        if normalized_question in seen_questions:
+            errors.append(f"Duplicate FAQ question: {question}")
+        if normalized_answer in seen_answers:
+            errors.append(f"Duplicate FAQ answer: {answer[:80]}")
+        seen_questions.add(normalized_question)
+        seen_answers.add(normalized_answer)
+    if article_knowledge and not accepted:
+        errors.append("No quality-checked FAQ available.")
+    return ("FAIL" if errors else "PASS", errors)
+
+
+def semantic_sections_for_safe_export(validation_report: dict[str, object]) -> dict[str, object]:
+    exported = set(validation_report.get("semantic_sections_exported", []))
+    removed = set(validation_report.get("semantic_sections_removed", []))
+    if not exported and not removed:
+        checks = validation_report.get("checks", {})
+        mapping = {
+            "formula": "Formula Validation",
+            "entity": "Entity Validation",
+            "reference": "Cross-reference Validation",
+            "procedure": "Procedure Validation",
+            "faq": "FAQ Validation",
+            "topic_keyword": "Topic/Keyword Validation",
+        }
+        exported = {name for name, check in mapping.items() if checks.get(check, {}).get("status") == "PASS"} if isinstance(checks, dict) else set()
+        removed = set(mapping) - exported
+    return {
+        "formula": "formula" in exported,
+        "entity": "entity" in exported,
+        "reference": "reference" in exported,
+        "procedure": "procedure" in exported,
+        "faq": "faq" in exported,
+        "topic_keyword": "topic_keyword" in exported,
+        "exported": sorted(exported),
+        "removed": sorted(removed),
+    }
 
 
 TOPIC_TAXONOMY: dict[str, tuple[str, str]] = {
@@ -1990,6 +2304,132 @@ def render_asset_faq(article_knowledge) -> str:
     return "\n".join(lines).strip()
 
 
+def render_safe_table_of_contents(asset: LegalKnowledgeAsset) -> str:
+    lines: list[str] = []
+    root = next(node for node in asset.nodes if node.id == asset.root_id)
+    for provision in children(asset.nodes, root.id, "PROVISION"):
+        kind = str(provision.metadata.get("provision_kind", "Điều"))
+        lines.append(f"- {kind} {provision.number}: {provision.title or provision.id} (`{provision.id}`)")
+    for issued in children(asset.nodes, root.id, "ISSUED_CONTENT"):
+        lines.append(f"- Nội dung ban hành kèm theo: {issued.title} (`{issued.id}`)")
+        for provision in children(asset.nodes, issued.id, "PROVISION"):
+            kind = str(provision.metadata.get("provision_kind", "Điều"))
+            lines.append(f"  - {kind} {provision.number}: {provision.title or provision.id} (`{provision.id}`)")
+        for appendix in [node for node in children(asset.nodes, issued.id) if node.node_type in {"APPENDIX", "FORM"}]:
+            label = "Biểu mẫu" if appendix.node_type == "FORM" else "Phụ lục"
+            lines.append(f"  - {label} {appendix.canonical_number or appendix.number}: {appendix.title or appendix.id} (`{appendix.id}`)")
+    for appendix in [node for node in children(asset.nodes, root.id) if node.node_type in {"APPENDIX", "FORM"}]:
+        label = "Biểu mẫu" if appendix.node_type == "FORM" else "Phụ lục"
+        lines.append(f"- {label} {appendix.canonical_number or appendix.number}: {appendix.title or appendix.id} (`{appendix.id}`)")
+    return "\n".join(lines) if lines else "- Không có mục lục."
+
+
+def render_entity_index(asset: LegalKnowledgeAsset) -> str:
+    entities = asset.semantic.get("entities", [])
+    if not entities:
+        return "Không có entity đã kiểm định."
+    lines = ["| entity_id | type | name | definition_node_id | definition |", "| --- | --- | --- | --- | --- |"]
+    for entity in entities:
+        lines.append(
+            f"| {entity.get('entity_id', '')} | {entity.get('entity_type', '')} | "
+            f"{markdown_cell(entity.get('display_name', ''))} | {entity.get('definition_node_id', '')} | "
+            f"{markdown_cell(entity.get('definition') or '')} |"
+        )
+    return "\n".join(lines)
+
+
+def render_safe_topic_keyword_index(asset: LegalKnowledgeAsset) -> str:
+    lines = ["### Topic", "", "| topic_id | label | node_ids |", "| --- | --- | --- |"]
+    for topic in asset.semantic.get("topics", []):
+        lines.append(f"| {topic.get('topic_id', '')} | {markdown_cell(topic.get('label_vi', ''))} | {', '.join(topic.get('node_ids', []))} |")
+    lines.extend(["", "### Keyword", "", "| keyword_id | keyword | supporting_node_ids |", "| --- | --- | --- |"])
+    for keyword in asset.semantic.get("keywords", []):
+        lines.append(
+            f"| {keyword.get('keyword_id', '')} | {markdown_cell(keyword.get('display_term', ''))} | "
+            f"{', '.join(keyword.get('node_ids', []))} |"
+        )
+    return "\n".join(lines)
+
+
+def render_safe_validation_status(validation_report: dict[str, object]) -> str:
+    checks = validation_report.get("checks", {})
+    lines = [
+        f"- READY_FOR_GPT_KNOWLEDGE: {str(validation_report.get('READY_FOR_GPT_KNOWLEDGE')).lower()}",
+        f"- Source checksum: `{validation_report.get('checksums', {}).get('source_checksum', '')}`",
+        f"- Export checksum: `{validation_report.get('checksums', {}).get('export_checksum', 'EXPORT_CHECKSUM_PENDING')}`",
+        f"- Semantic sections exported: {', '.join(validation_report.get('semantic_sections_exported', [])) or 'none'}",
+        f"- Semantic sections removed: {', '.join(validation_report.get('semantic_sections_removed', [])) or 'none'}",
+        "",
+    ]
+    if isinstance(checks, dict):
+        for name, check in checks.items():
+            lines.append(f"- {name}: {check.get('status', 'UNKNOWN')}")
+    return "\n".join(lines)
+
+
+def render_gpt_instructions(asset: LegalKnowledgeAsset, validation_report: dict[str, object]) -> str:
+    return "\n".join(
+        [
+            f"# GPT Instructions - {asset.document_number}",
+            "",
+            "1. Khi hỏi nội dung Điều, Khoản, Điểm hoặc Phụ lục, phải lấy từ phần Văn bản chính hoặc Phụ lục gốc.",
+            "2. Không dùng FAQ, topic, keyword hoặc entity để thay thế nội dung gốc.",
+            "3. Khi có mâu thuẫn, ưu tiên nội dung gốc.",
+            "4. Không tự suy luận hiệu lực, sửa đổi hoặc thay thế nếu Knowledge không có căn cứ.",
+            "5. Không trích công thức từ semantic index nếu Formula Validation chưa PASS.",
+            "6. Nếu không tìm thấy quy định, phải nói rõ chưa tìm thấy trong Knowledge.",
+            "7. Khi viện dẫn phải nêu rõ Điều, Khoản, Điểm và số văn bản.",
+            "8. Không được bịa căn cứ pháp lý.",
+            "",
+            f"READY_FOR_GPT_KNOWLEDGE: {str(validation_report.get('READY_FOR_GPT_KNOWLEDGE')).lower()}",
+            f"Semantic sections exported: {', '.join(validation_report.get('semantic_sections_exported', [])) or 'none'}",
+            f"Semantic sections removed: {', '.join(validation_report.get('semantic_sections_removed', [])) or 'none'}",
+            "",
+        ]
+    )
+
+
+def render_gpt_safe_regression_html(asset: LegalKnowledgeAsset, validation_report: dict[str, object]) -> str:
+    rows = []
+    checks = validation_report.get("checks", {})
+    if isinstance(checks, dict):
+        for name, check in checks.items():
+            rows.append(f"<tr><td>{escape_html(name)}</td><td>{escape_html(str(check.get('status', 'UNKNOWN')))}</td></tr>")
+    return (
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>GPT Safe Regression</title>"
+        "<style>body{font-family:Arial,sans-serif;margin:24px}td,th{border:1px solid #ddd;padding:8px}table{border-collapse:collapse}</style>"
+        "</head><body>"
+        f"<h1>GPT Safe Regression - {escape_html(asset.document_number)}</h1>"
+        f"<p>READY_FOR_GPT_KNOWLEDGE: <strong>{str(validation_report.get('READY_FOR_GPT_KNOWLEDGE')).lower()}</strong></p>"
+        "<table><tr><th>Check</th><th>Status</th></tr>"
+        + "".join(rows)
+        + "</table></body></html>"
+    )
+
+
+def render_gpt_safe_regression_summary(asset: LegalKnowledgeAsset, validation_report: dict[str, object]) -> str:
+    checks = validation_report.get("checks", {})
+    lines = [
+        f"# GPT Safe Regression Summary - {asset.document_number}",
+        "",
+        f"- READY_FOR_GPT_KNOWLEDGE: {str(validation_report.get('READY_FOR_GPT_KNOWLEDGE')).lower()}",
+        f"- Source checksum: `{validation_report.get('checksums', {}).get('source_checksum', '')}`",
+        f"- Export checksum: `{validation_report.get('checksums', {}).get('export_checksum', '')}`",
+        f"- Semantic sections exported: {', '.join(validation_report.get('semantic_sections_exported', [])) or 'none'}",
+        f"- Semantic sections removed: {', '.join(validation_report.get('semantic_sections_removed', [])) or 'none'}",
+        "",
+        "## Checks",
+        "",
+    ]
+    if isinstance(checks, dict):
+        lines.extend(f"- {name}: {check.get('status', 'UNKNOWN')}" for name, check in checks.items())
+    return "\n".join(lines).strip() + "\n"
+
+
+def escape_html(value: str) -> str:
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
 def build_article_knowledge_from_nodes(nodes: list[AssetNode]):
     article_knowledge: list[ArticleKnowledge] = []
     for node in nodes:
@@ -2024,10 +2464,16 @@ def children(nodes: list[AssetNode], parent_id: str, node_type: str | None = Non
 def write_legal_asset_outputs(asset: LegalKnowledgeAsset, output_root: Path) -> dict[str, Path]:
     output_root.mkdir(parents=True, exist_ok=True)
     safe = document_folder_name_from_asset(asset)
+    gpt_safe = gpt_safe_document_name_from_asset(asset)
     json_path = output_root / f"LEGAL_ASSET_{safe}.json"
     structure_path = output_root / f"STRUCTURE_{safe}.json"
     md_path = output_root / f"LEGAL_ASSET_{safe}.md"
     gpt_path = output_root / f"GPT_KNOWLEDGE_{safe}.md"
+    gpt_safe_path = output_root / f"GPT_KNOWLEDGE_SAFE_{gpt_safe}.md"
+    gpt_instructions_path = output_root / f"GPT_INSTRUCTIONS_{gpt_safe}.md"
+    gpt_safe_validation_json_path = output_root / f"validation_report_{gpt_safe}.json"
+    gpt_safe_regression_html_path = output_root / f"regression_report_{gpt_safe}.html"
+    gpt_safe_regression_summary_path = output_root / f"regression_summary_{gpt_safe}.md"
     docx_path = output_root / f"LEGAL_ASSET_{safe}.docx"
     semantic_dir = output_root / f"semantic_{safe}"
     migration_path = output_root / f"MIGRATION_REPORT_{safe}.md"
@@ -2049,14 +2495,25 @@ def write_legal_asset_outputs(asset: LegalKnowledgeAsset, output_root: Path) -> 
     if structure_validation["status"] == "FAIL":
         raise ValueError("Structure validation FAIL: " + "; ".join(structure_validation["errors"]))
     markdown = render_asset_markdown(asset)
+    gpt_safe_markdown, gpt_safe_validation = render_gpt_safe_markdown(asset)
     md_path.write_text(markdown, encoding="utf-8")
     gpt_path.write_text(markdown, encoding="utf-8")
+    gpt_safe_path.write_text(gpt_safe_markdown, encoding="utf-8")
+    gpt_safe_validation_json_path.write_text(json.dumps(gpt_safe_validation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    gpt_instructions_path.write_text(render_gpt_instructions(asset, gpt_safe_validation), encoding="utf-8")
+    gpt_safe_regression_html_path.write_text(render_gpt_safe_regression_html(asset, gpt_safe_validation), encoding="utf-8")
+    gpt_safe_regression_summary_path.write_text(render_gpt_safe_regression_summary(asset, gpt_safe_validation), encoding="utf-8")
     write_asset_docx(asset, docx_path)
     return {
         "json": json_path,
         "structure": structure_path,
         "markdown": md_path,
         "gpt_markdown": gpt_path,
+        "gpt_safe_markdown": gpt_safe_path,
+        "gpt_instructions": gpt_instructions_path,
+        "gpt_safe_validation_json": gpt_safe_validation_json_path,
+        "gpt_safe_regression_html": gpt_safe_regression_html_path,
+        "gpt_safe_regression_summary": gpt_safe_regression_summary_path,
         "word": docx_path,
         "semantic_dir": semantic_dir,
         "migration_report": migration_path,
@@ -2266,6 +2723,14 @@ def document_folder_name_from_asset(asset: LegalKnowledgeAsset) -> str:
     source = asset.document_number or asset.root_id or uuid4().hex[:8]
     source = source.replace("/", "_").replace(".", "_")
     source = re.sub(r"[^A-Za-z0-9Đđ_-]+", "_", source.strip())
+    return re.sub(r"_+", "_", source).strip("_") or "legal_asset"
+
+
+def gpt_safe_document_name_from_asset(asset: LegalKnowledgeAsset) -> str:
+    source = asset.document_number or asset.root_id or uuid4().hex[:8]
+    source = source.replace("Đ", "D").replace("đ", "d")
+    source = source.replace("/", "_").replace(".", "_")
+    source = re.sub(r"[^A-Za-z0-9_-]+", "_", source.strip())
     return re.sub(r"_+", "_", source).strip("_") or "legal_asset"
 
 

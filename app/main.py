@@ -49,6 +49,11 @@ app.add_middleware(
     expose_headers=[
         "X-Validation-Status",
         "X-GPT-Knowledge-Url",
+        "X-GPT-Safe-Knowledge-Url",
+        "X-GPT-Instructions-Url",
+        "X-GPT-Safe-Validation-Json-Url",
+        "X-GPT-Safe-Regression-Html-Url",
+        "X-GPT-Safe-Regression-Summary-Url",
         "X-Legal-Asset-Json-Url",
         "X-Legal-Asset-Structure-Url",
         "X-Legal-Asset-Markdown-Url",
@@ -89,10 +94,14 @@ def download_legal_asset_file(file_name: str):
     safe_name = Path(file_name).name
     allowed_prefixes = (
         "LEGAL_ASSET_",
+        "GPT_INSTRUCTIONS_",
         "MIGRATION_REPORT_",
         "ASSET_VALIDATION_",
         "SEMANTIC_VALIDATION_",
         "REGRESSION_SUMMARY_",
+        "regression_summary_",
+        "regression_report_",
+        "validation_report_",
         "STRUCTURE_",
         "RUNTIME_LOG_",
     )
@@ -103,6 +112,8 @@ def download_legal_asset_file(file_name: str):
         raise HTTPException(status_code=404, detail="Không tìm thấy file Legal Asset.")
     if safe_name.endswith(".json"):
         media_type = "application/json"
+    elif safe_name.endswith(".html"):
+        media_type = "text/html; charset=utf-8"
     elif safe_name.endswith(".docx"):
         media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     else:
@@ -163,6 +174,11 @@ async def create_knowledge_pack(file: UploadFile = File(...)):
     download_name = f"{Path(original_name).stem}_knowledge_pack.zip"
     response = FileResponse(zip_path, media_type="application/zip", filename=download_name)
     response.headers["X-GPT-Knowledge-Url"] = f"/api/knowledge-markdown/{quote(asset_outputs['gpt_markdown'].name)}"
+    response.headers["X-GPT-Safe-Knowledge-Url"] = f"/api/knowledge-markdown/{quote(asset_outputs['gpt_safe_markdown'].name)}"
+    response.headers["X-GPT-Instructions-Url"] = f"/api/legal-asset/{quote(asset_outputs['gpt_instructions'].name)}"
+    response.headers["X-GPT-Safe-Validation-Json-Url"] = f"/api/legal-asset/{quote(asset_outputs['gpt_safe_validation_json'].name)}"
+    response.headers["X-GPT-Safe-Regression-Html-Url"] = f"/api/legal-asset/{quote(asset_outputs['gpt_safe_regression_html'].name)}"
+    response.headers["X-GPT-Safe-Regression-Summary-Url"] = f"/api/legal-asset/{quote(asset_outputs['gpt_safe_regression_summary'].name)}"
     response.headers["X-Legal-Asset-Json-Url"] = f"/api/legal-asset/{quote(asset_outputs['json'].name)}"
     response.headers["X-Legal-Asset-Structure-Url"] = f"/api/legal-asset/{quote(asset_outputs['structure'].name)}"
     response.headers["X-Legal-Asset-Markdown-Url"] = f"/api/legal-asset/{quote(asset_outputs['markdown'].name)}"
@@ -393,6 +409,11 @@ INDEX_HTML = """
           downloadArea.appendChild(markdownLink);
         }
         const assetLinks = [
+          ["X-GPT-Safe-Knowledge-Url", "Tải GPT SAFE Markdown", `${baseName}_gpt_safe.md`],
+          ["X-GPT-Instructions-Url", "Tải GPT Instructions", `${baseName}_gpt_instructions.md`],
+          ["X-GPT-Safe-Validation-Json-Url", "Tải GPT SAFE Validation JSON", `${baseName}_gpt_safe_validation.json`],
+          ["X-GPT-Safe-Regression-Html-Url", "Tải GPT SAFE Regression HTML", `${baseName}_gpt_safe_regression.html`],
+          ["X-GPT-Safe-Regression-Summary-Url", "Tải GPT SAFE Regression Summary", `${baseName}_gpt_safe_regression.md`],
           ["X-Legal-Asset-Json-Url", "Tải Legal Asset JSON", `${baseName}_legal_asset.json`],
           ["X-Legal-Asset-Structure-Url", "Tải structure.json", `${baseName}_structure.json`],
           ["X-Legal-Asset-Markdown-Url", "Tải Legal Asset Markdown", `${baseName}_legal_asset.md`],

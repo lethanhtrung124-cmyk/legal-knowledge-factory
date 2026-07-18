@@ -1061,20 +1061,26 @@ def build_article_faqs(item: ArticleKnowledge) -> list[dict[str, str]]:
 
 def quality_checked_faqs(article_knowledge: list[ArticleKnowledge]) -> list[dict[str, str]]:
     accepted: list[dict[str, str]] = []
-    seen: set[str] = set()
+    seen_questions: set[str] = set()
+    seen_answers: set[str] = set()
     article_by_number = {item.article.number: item.article for item in article_knowledge}
     for item in article_knowledge:
         for faq in item.faqs:
             question = faq.get("question", "").strip()
+            answer = faq.get("answer", "").strip()
             normalized_question = normalize_for_compare(question)
-            if not question or normalized_question in seen:
+            normalized_answer = normalize_for_compare(answer)
+            if not question or not answer or normalized_question in seen_questions or normalized_answer in seen_answers:
                 continue
             if is_generic_faq_question(question):
+                continue
+            if is_low_value_faq_answer(answer):
                 continue
             if not faq_has_direct_basis(faq, item.article, article_by_number):
                 continue
             accepted.append(faq)
-            seen.add(normalized_question)
+            seen_questions.add(normalized_question)
+            seen_answers.add(normalized_answer)
     return accepted
 
 
@@ -1102,6 +1108,15 @@ def is_generic_faq_question(question: str) -> bool:
         r"^dieu \d+ quy dinh noi dung gi$",
     )
     return any(re.match(pattern, normalized) for pattern in generic_patterns)
+
+
+def is_low_value_faq_answer(answer: str) -> bool:
+    normalized = normalize_for_compare(answer)
+    low_value_patterns = (
+        r"^chi xac dinh theo chu the duoc neu trong noi dung goc cua dieu nay$",
+        r"^kiem tra noi dung goc khoan diem va dieu lien quan neu co$",
+    )
+    return any(re.match(pattern, normalized) for pattern in low_value_patterns)
 
 
 def validate_merged_markdown(

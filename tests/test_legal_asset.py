@@ -10,6 +10,7 @@ from app.legal_asset import (
     detect_issued_content_start,
     render_asset_markdown,
     render_gpt_knowledge_from_asset,
+    render_gpt_safe_markdown,
     validate_asset,
     validate_structure_for_export,
     write_legal_asset_outputs,
@@ -278,6 +279,34 @@ def test_semantic_layer_exports_json_and_markdown_sections(tmp_path):
     assert "## Công thức" in markdown
     assert "## Trình tự thực hiện" in markdown
     assert "| node_id | scope_type | title | topics | canonical_keywords | formulas | references |" in markdown
+
+
+def test_gpt_safe_excludes_failed_semantic_but_keeps_original_text(tmp_path):
+    raw_text = "\n".join(
+        [
+            "Điều 1. Nội dung",
+            "1. Công thức nguyên văn: D (%) = G*/G × 100%.",
+            "2. Nội dung gốc phải được giữ nguyên.",
+        ]
+    )
+    parsed = make_parsed(raw_text, articles=[Article(number="1", title="Nội dung", raw_content=raw_text)])
+    asset = build_legal_knowledge_asset(parsed)
+    asset.semantic["validation_report"]["errors"] = [{"code": "KB-SEM-FORMULA", "message": "Formula test failure"}]
+    for check in asset.semantic["validation_report"]["checks"]:
+        if check["check_id"] == "KB-VAL-FORMULA-001":
+            check["status"] = "FAIL"
+
+    markdown, report = render_gpt_safe_markdown(asset)
+    outputs = write_legal_asset_outputs(asset, tmp_path)
+    validation_json = json.loads(outputs["gpt_safe_validation_json"].read_text(encoding="utf-8"))
+
+    assert "D (%) = G*/G × 100%" in markdown
+    assert "## Công thức đã kiểm định" not in markdown
+    assert report["checks"]["GPT Safe Export"]["status"] == "PASS"
+    assert "formula" in report["semantic_sections_removed"]
+    assert validation_json["checks"]["Formula Validation"]["status"] == "FAIL"
+    assert outputs["gpt_safe_markdown"].name.startswith("GPT_KNOWLEDGE_SAFE_")
+    assert outputs["gpt_instructions"].exists()
 
 
 def test_semantic_engine_canonicalizes_and_deduplicates_core_indexes():
