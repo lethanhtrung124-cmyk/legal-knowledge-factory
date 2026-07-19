@@ -305,8 +305,16 @@ def test_gpt_safe_excludes_failed_semantic_but_keeps_original_text(tmp_path):
     assert report["checks"]["GPT Safe Export"]["status"] == "PASS"
     assert "formula" in report["semantic_sections_removed"]
     assert validation_json["checks"]["Formula Validation"]["status"] == "FAIL"
+    assert validation_json["READY_FOR_GPT"] is True
+    assert validation_json["checksums"]["export_checksum"]
+    assert validation_json["article_node_map"][0]["node_id"]
     assert outputs["gpt_safe_markdown"].name.startswith("GPT_KNOWLEDGE_SAFE_")
     assert outputs["gpt_instructions"].exists()
+    assert outputs["governance_report"].exists()
+    assert outputs["export_checksum"].exists()
+    assert outputs["article_node_map_md"].exists()
+    assert outputs["article_node_map_json"].exists()
+    assert "## Bảng ánh xạ" in markdown
 
 
 def test_semantic_engine_canonicalizes_and_deduplicates_core_indexes():

@@ -1,4 +1,5 @@
 import logging
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -24,6 +25,16 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+GOVERNANCE_OUTPUT_KEYS = (
+    "gpt_instructions",
+    "gpt_safe_validation_json",
+    "export_checksum",
+    "governance_report",
+    "article_node_map_md",
+    "article_node_map_json",
+)
 
 
 @asynccontextmanager
@@ -75,6 +86,20 @@ def index() -> str:
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def append_governance_outputs_to_zip(zip_path: Path, asset_outputs: dict[str, Path]) -> None:
+    with zipfile.ZipFile(zip_path, "a", compression=zipfile.ZIP_DEFLATED) as archive:
+        existing = set(archive.namelist())
+        for key in GOVERNANCE_OUTPUT_KEYS:
+            path = asset_outputs.get(key)
+            if not path or not path.exists():
+                continue
+            arcname = f"governance/{path.name}"
+            if arcname in existing:
+                continue
+            archive.write(path, arcname)
+            existing.add(arcname)
 
 
 @app.get("/api/knowledge-markdown/{file_name}")
@@ -154,6 +179,7 @@ async def create_knowledge_pack(file: UploadFile = File(...)):
         )
         asset_outputs = write_legal_asset_outputs(asset, OUTPUT_DIR / "knowledge_packs")
         zip_path = build_knowledge_pack(parsed, emit_gpt_markdown=False)
+        append_governance_outputs_to_zip(zip_path, asset_outputs)
         report_path = zip_path.with_suffix("") / "validation_report.md"
         validation_report = report_path.read_text(encoding="utf-8") if report_path.exists() else ""
         if "- Kết luận: FAIL" in validation_report:

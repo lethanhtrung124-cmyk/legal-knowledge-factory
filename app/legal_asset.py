@@ -692,6 +692,7 @@ def render_gpt_safe_markdown(asset: LegalKnowledgeAsset) -> tuple[str, dict[str,
     ]
     lines.extend(render_original_content_sections(asset))
     lines.extend(["", "## Bảng tra cứu Điều - Khoản - Điểm", "", render_asset_lookup(asset), ""])
+    lines.extend(["", "## Bảng ánh xạ Điều - Node", "", render_article_node_map(asset), ""])
 
     if semantic_sections.get("formula"):
         lines.extend(["", "## Công thức đã kiểm định", "", render_formula_index(asset), ""])
@@ -919,6 +920,7 @@ def build_gpt_safe_validation_report(asset: LegalKnowledgeAsset, markdown: str) 
         "asset_id": asset.root_id,
         "document_number": asset.document_number,
         "exporter_version": GPT_SAFE_EXPORTER_VERSION,
+        "READY_FOR_GPT": ready,
         "READY_FOR_GPT_KNOWLEDGE": ready,
         "checks": checks,
         "semantic_sections_exported": [name for name, allowed in semantic_sections.items() if allowed],
@@ -927,6 +929,7 @@ def build_gpt_safe_validation_report(asset: LegalKnowledgeAsset, markdown: str) 
             "source_checksum": root.checksum,
             "export_checksum": checksum(markdown) if markdown else "EXPORT_CHECKSUM_PENDING",
         },
+        "article_node_map": build_article_node_map(asset),
         "original_text_integrity": {
             "changed": bool(integrity_errors),
             "evidence": "All PROVISION/APPENDIX/FORM original_text blocks are present in GPT_SAFE Markdown." if not integrity_errors else integrity_errors,
@@ -2324,6 +2327,42 @@ def render_safe_table_of_contents(asset: LegalKnowledgeAsset) -> str:
     return "\n".join(lines) if lines else "- Không có mục lục."
 
 
+def build_article_node_map(asset: LegalKnowledgeAsset) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for node in asset.nodes:
+        if node.node_type != "PROVISION":
+            continue
+        rows.append(
+            {
+                "article_number": node.number,
+                "provision_kind": node.metadata.get("provision_kind", "Điều"),
+                "title": node.title,
+                "node_id": node.id,
+                "parent_id": node.parent_id,
+                "scope_type": node.scope_type,
+                "order": node.order,
+                "checksum": node.checksum,
+            }
+        )
+    return rows
+
+
+def render_article_node_map(asset: LegalKnowledgeAsset) -> str:
+    rows = build_article_node_map(asset)
+    if not rows:
+        return "Không có Điều/Node để ánh xạ."
+    lines = [
+        "| Điều | Loại | node_id | parent_id | scope_type | title | checksum |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            f"| {row['article_number']} | {row['provision_kind']} | `{row['node_id']}` | "
+            f"`{row['parent_id']}` | {row['scope_type']} | {markdown_cell(row['title'])} | `{row['checksum']}` |"
+        )
+    return "\n".join(lines)
+
+
 def render_entity_index(asset: LegalKnowledgeAsset) -> str:
     entities = asset.semantic.get("entities", [])
     if not entities:
@@ -2355,6 +2394,7 @@ def render_safe_validation_status(validation_report: dict[str, object]) -> str:
     checks = validation_report.get("checks", {})
     lines = [
         f"- READY_FOR_GPT_KNOWLEDGE: {str(validation_report.get('READY_FOR_GPT_KNOWLEDGE')).lower()}",
+        f"- READY_FOR_GPT: {str(validation_report.get('READY_FOR_GPT')).lower()}",
         f"- Source checksum: `{validation_report.get('checksums', {}).get('source_checksum', '')}`",
         f"- Export checksum: `{validation_report.get('checksums', {}).get('export_checksum', 'EXPORT_CHECKSUM_PENDING')}`",
         f"- Semantic sections exported: {', '.join(validation_report.get('semantic_sections_exported', [])) or 'none'}",
@@ -2382,6 +2422,7 @@ def render_gpt_instructions(asset: LegalKnowledgeAsset, validation_report: dict[
             "8. Không được bịa căn cứ pháp lý.",
             "",
             f"READY_FOR_GPT_KNOWLEDGE: {str(validation_report.get('READY_FOR_GPT_KNOWLEDGE')).lower()}",
+            f"READY_FOR_GPT: {str(validation_report.get('READY_FOR_GPT')).lower()}",
             f"Semantic sections exported: {', '.join(validation_report.get('semantic_sections_exported', [])) or 'none'}",
             f"Semantic sections removed: {', '.join(validation_report.get('semantic_sections_removed', [])) or 'none'}",
             "",
@@ -2401,6 +2442,7 @@ def render_gpt_safe_regression_html(asset: LegalKnowledgeAsset, validation_repor
         "</head><body>"
         f"<h1>GPT Safe Regression - {escape_html(asset.document_number)}</h1>"
         f"<p>READY_FOR_GPT_KNOWLEDGE: <strong>{str(validation_report.get('READY_FOR_GPT_KNOWLEDGE')).lower()}</strong></p>"
+        f"<p>READY_FOR_GPT: <strong>{str(validation_report.get('READY_FOR_GPT')).lower()}</strong></p>"
         "<table><tr><th>Check</th><th>Status</th></tr>"
         + "".join(rows)
         + "</table></body></html>"
@@ -2413,6 +2455,7 @@ def render_gpt_safe_regression_summary(asset: LegalKnowledgeAsset, validation_re
         f"# GPT Safe Regression Summary - {asset.document_number}",
         "",
         f"- READY_FOR_GPT_KNOWLEDGE: {str(validation_report.get('READY_FOR_GPT_KNOWLEDGE')).lower()}",
+        f"- READY_FOR_GPT: {str(validation_report.get('READY_FOR_GPT')).lower()}",
         f"- Source checksum: `{validation_report.get('checksums', {}).get('source_checksum', '')}`",
         f"- Export checksum: `{validation_report.get('checksums', {}).get('export_checksum', '')}`",
         f"- Semantic sections exported: {', '.join(validation_report.get('semantic_sections_exported', [])) or 'none'}",
@@ -2422,6 +2465,54 @@ def render_gpt_safe_regression_summary(asset: LegalKnowledgeAsset, validation_re
         "",
     ]
     if isinstance(checks, dict):
+        lines.extend(f"- {name}: {check.get('status', 'UNKNOWN')}" for name, check in checks.items())
+    return "\n".join(lines).strip() + "\n"
+
+
+def render_export_checksum(asset: LegalKnowledgeAsset, validation_report: dict[str, object]) -> str:
+    checksums = validation_report.get("checksums", {})
+    return "\n".join(
+        [
+            f"# Export Checksum - {asset.document_number}",
+            "",
+            f"- Source checksum: `{checksums.get('source_checksum', '')}`",
+            f"- GPT SAFE export checksum: `{checksums.get('export_checksum', '')}`",
+            f"- READY_FOR_GPT_KNOWLEDGE: {str(validation_report.get('READY_FOR_GPT_KNOWLEDGE')).lower()}",
+            "",
+        ]
+    )
+
+
+def render_governance_report(asset: LegalKnowledgeAsset, validation_report: dict[str, object]) -> str:
+    checks = validation_report.get("checks", {})
+    lines = [
+        f"# Governance Report - {asset.document_number}",
+        "",
+        "## Validation Report",
+        "",
+        f"- READY_FOR_GPT_KNOWLEDGE: {str(validation_report.get('READY_FOR_GPT_KNOWLEDGE')).lower()}",
+        f"- READY_FOR_GPT: {str(validation_report.get('READY_FOR_GPT')).lower()}",
+        f"- GPT Safe Export: {checks.get('GPT Safe Export', {}).get('status', 'UNKNOWN') if isinstance(checks, dict) else 'UNKNOWN'}",
+        "",
+        "## Export Checksum",
+        "",
+        render_export_checksum(asset, validation_report).replace(f"# Export Checksum - {asset.document_number}\n\n", "").strip(),
+        "",
+        "## GPT Instructions",
+        "",
+        render_gpt_instructions(asset, validation_report).replace(f"# GPT Instructions - {asset.document_number}\n\n", "").strip(),
+        "",
+        "## READY_FOR_GPT",
+        "",
+        f"`{str(validation_report.get('READY_FOR_GPT_KNOWLEDGE')).lower()}`",
+        "",
+        "## Bảng ánh xạ Điều - Node",
+        "",
+        render_article_node_map(asset),
+        "",
+    ]
+    if isinstance(checks, dict):
+        lines.extend(["## Validation Checks", ""])
         lines.extend(f"- {name}: {check.get('status', 'UNKNOWN')}" for name, check in checks.items())
     return "\n".join(lines).strip() + "\n"
 
@@ -2474,6 +2565,10 @@ def write_legal_asset_outputs(asset: LegalKnowledgeAsset, output_root: Path) -> 
     gpt_safe_validation_json_path = output_root / f"validation_report_{gpt_safe}.json"
     gpt_safe_regression_html_path = output_root / f"regression_report_{gpt_safe}.html"
     gpt_safe_regression_summary_path = output_root / f"regression_summary_{gpt_safe}.md"
+    governance_report_path = output_root / f"GOVERNANCE_REPORT_{gpt_safe}.md"
+    export_checksum_path = output_root / f"EXPORT_CHECKSUM_{gpt_safe}.md"
+    article_node_map_md_path = output_root / f"ARTICLE_NODE_MAP_{gpt_safe}.md"
+    article_node_map_json_path = output_root / f"ARTICLE_NODE_MAP_{gpt_safe}.json"
     docx_path = output_root / f"LEGAL_ASSET_{safe}.docx"
     semantic_dir = output_root / f"semantic_{safe}"
     migration_path = output_root / f"MIGRATION_REPORT_{safe}.md"
@@ -2503,6 +2598,10 @@ def write_legal_asset_outputs(asset: LegalKnowledgeAsset, output_root: Path) -> 
     gpt_instructions_path.write_text(render_gpt_instructions(asset, gpt_safe_validation), encoding="utf-8")
     gpt_safe_regression_html_path.write_text(render_gpt_safe_regression_html(asset, gpt_safe_validation), encoding="utf-8")
     gpt_safe_regression_summary_path.write_text(render_gpt_safe_regression_summary(asset, gpt_safe_validation), encoding="utf-8")
+    governance_report_path.write_text(render_governance_report(asset, gpt_safe_validation), encoding="utf-8")
+    export_checksum_path.write_text(render_export_checksum(asset, gpt_safe_validation), encoding="utf-8")
+    article_node_map_md_path.write_text(render_article_node_map(asset) + "\n", encoding="utf-8")
+    article_node_map_json_path.write_text(json.dumps(build_article_node_map(asset), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     write_asset_docx(asset, docx_path)
     return {
         "json": json_path,
@@ -2514,6 +2613,10 @@ def write_legal_asset_outputs(asset: LegalKnowledgeAsset, output_root: Path) -> 
         "gpt_safe_validation_json": gpt_safe_validation_json_path,
         "gpt_safe_regression_html": gpt_safe_regression_html_path,
         "gpt_safe_regression_summary": gpt_safe_regression_summary_path,
+        "governance_report": governance_report_path,
+        "export_checksum": export_checksum_path,
+        "article_node_map_md": article_node_map_md_path,
+        "article_node_map_json": article_node_map_json_path,
         "word": docx_path,
         "semantic_dir": semantic_dir,
         "migration_report": migration_path,

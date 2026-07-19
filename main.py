@@ -5,6 +5,7 @@ from pathlib import Path
 from app.document_processor import parse_document
 from app.knowledge_pack import build_knowledge_pack
 from app.legal_asset import build_legal_knowledge_asset, write_legal_asset_outputs
+from app.main import append_governance_outputs_to_zip
 
 
 def main() -> int:
@@ -30,6 +31,7 @@ def main() -> int:
         asset = build_legal_knowledge_asset(parsed)
         outputs = write_legal_asset_outputs(asset, output_root)
         zip_path = build_knowledge_pack(parsed, output_root=output_root, emit_gpt_markdown=False)
+        append_governance_outputs_to_zip(zip_path, outputs)
         print(zip_path)
         for path in outputs.values():
             print(path)
