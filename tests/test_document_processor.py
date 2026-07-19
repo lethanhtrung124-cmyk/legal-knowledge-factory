@@ -8,6 +8,7 @@ from app.document_processor import (
     detect_title,
     detect_document_type,
     extract_closing_metadata,
+    normalize_text,
     parse_appendices,
     parse_structure,
     parse_thematic_structure,
@@ -16,6 +17,25 @@ from app.document_processor import (
     split_preamble_and_basis,
 )
 from app.knowledge_pack import article_contains_appendix_marker, build_article_knowledge, validate_pack
+
+
+def test_parse_structure_handles_decomposed_vietnamese_article_heading():
+    raw_text = "\n".join(
+        [
+            "Điều 70. Sửa đổi hợp đồng",
+            "1. Nội dung Điều 70.",
+            "Điê\u0300u 71. Ký kết hợp đồng dự án đầu tư kinh doanh",
+            "1. Nội dung Điều 71.",
+            "Điều 72. Hồ sơ hợp đồng dự án đầu tư kinh doanh",
+            "1. Nội dung Điều 72.",
+        ]
+    )
+    lines = [line.strip() for line in normalize_text(raw_text).splitlines() if line.strip()]
+
+    _, _, _, articles = parse_structure(lines)
+
+    assert [article.number for article in articles] == ["70", "71", "72"]
+    assert articles[1].title == "Ký kết hợp đồng dự án đầu tư kinh doanh"
 
 
 def test_metadata_parser_prefers_number_line_before_legal_basis():
