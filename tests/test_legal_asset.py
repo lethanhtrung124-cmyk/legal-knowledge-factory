@@ -131,6 +131,42 @@ def test_real_appendices_are_children_of_issued_content():
     assert any("C = A + B" in node.original_text for node in appendices)
 
 
+def test_appendix_catalog_after_closing_is_not_empty_issued_content():
+    raw_text = "\n".join(
+        [
+            "\u0110i\u1ec1u 1. Ph\u1ea1m vi \u0111i\u1ec1u ch\u1ec9nh",
+            "1. Th\u00f4ng t\u01b0 n\u00e0y quy \u0111\u1ecbnh v\u1ec1 ho\u1ea1t \u0111\u1ed9ng chuy\u1ec3n \u0111\u1ed5i s\u1ed1.",
+            "\u0110i\u1ec1u 2. \u0110\u1ed1i t\u01b0\u1ee3ng \u00e1p d\u1ee5ng",
+            "1. C\u01a1 quan, t\u1ed5 ch\u1ee9c, c\u00e1 nh\u00e2n c\u00f3 li\u00ean quan.",
+            "\u0110i\u1ec1u 3. Hi\u1ec7u l\u1ef1c thi h\u00e0nh",
+            "1. Th\u00f4ng t\u01b0 n\u00e0y c\u00f3 hi\u1ec7u l\u1ef1c t\u1eeb ng\u00e0y 01 th\u00e1ng 7 n\u0103m 2026.",
+            "N\u01a1i nh\u1eadn:",
+            "B\u1ed8 TR\u01af\u1edeNG",
+            "DANH M\u1ee4C C\u00c1C PH\u1ee4 L\u1ee4C",
+            "(Ban h\u00e0nh k\u00e8m theo Th\u00f4ng t\u01b0 s\u1ed1 41/2026/TT-BKHCN)",
+            "Ph\u1ee5 l\u1ee5c I",
+            "C\u00e1c m\u1eabu bi\u1ec3u c\u1ee7a ho\u1ea1t \u0111\u1ed9ng ph\u00e1t tri\u1ec3n th\u1eed nghi\u1ec7m",
+            "Ph\u1ee5 l\u1ee5c II",
+            "C\u00e1c bi\u1ec3u m\u1eabu c\u1ee7a c\u00f4ng t\u00e1c tri\u1ec3n khai, gi\u00e1m s\u00e1t c\u00f4ng t\u00e1c tri\u1ec3n khai, nghi\u1ec7m thu, b\u00e0n giao s\u1ea3n ph\u1ea9m d\u1ef1 \u00e1n",
+            "PH\u1ee4 L\u1ee4C I",
+            "C\u00c1C M\u1eaaU BI\u1ec2U C\u1ee6A HO\u1ea0T \u0110\u1ed8NG PH\u00c1T TRI\u1ec2N TH\u1eec NGHI\u1ec6M",
+            "M\u1eabu s\u1ed1 1. V\u0103n b\u1ea3n \u0111\u1ec1 ngh\u1ecb c\u00f4ng nh\u1eadn k\u1ebft qu\u1ea3 th\u1eed nghi\u1ec7m",
+            "PH\u1ee4 L\u1ee4C II",
+            "C\u00c1C BI\u1ec2U M\u1eaaU C\u1ee6A C\u00d4NG T\u00c1C TRI\u1ec2N KHAI",
+            "M\u1eabu s\u1ed1 1. B\u00e1o c\u00e1o k\u1ebft qu\u1ea3",
+        ]
+    )
+    parsed = make_parsed(raw_text)
+
+    asset = build_legal_knowledge_asset(parsed)
+
+    assert asset.stats["main_document_article_count"] == 3
+    assert asset.stats["issued_content_count"] == 0
+    assert asset.stats["issued_content_provision_count"] == 0
+    assert asset.stats["appendix_count"] == 2
+    assert validate_structure_for_export(asset)["status"] == "PASS"
+
+
 def test_asset_export_has_required_headings_and_no_false_appendix_label():
     raw_text = "\n".join(
         [

@@ -129,6 +129,8 @@ def build_legal_knowledge_asset(parsed: ParsedDocument) -> LegalKnowledgeAsset:
     )
 
     issued_start = detect_issued_content_start(lines)
+    expected_issued_content = issued_start is not None
+    appendices_handled = False
     main_region_end = issued_start if issued_start is not None else len(lines)
     main_lines = trim_closing(lines[:main_region_end])
     main_articles = parsed.articles if issued_start is None else parse_structure(main_lines)[3]
@@ -138,42 +140,49 @@ def build_legal_knowledge_asset(parsed: ParsedDocument) -> LegalKnowledgeAsset:
     if issued_start is not None:
         issued_lines = lines[issued_start:]
         issued_title = detect_issued_title(issued_lines)
-        issued_id = f"{base_id}-ISSUED01"
         issued_main_lines, issued_appendix_lines = split_issued_content_and_appendices(issued_lines)
         issued_main_lines = strip_attached_confirmation_lines(issued_main_lines)
         issued_articles = parse_structure(issued_main_lines)[3]
         if not issued_articles:
             issued_articles = parse_thematic_provisions(issued_main_lines)
-        issued_scope, issued_subjects = detect_scope_subjects_for_articles(issued_articles)
-        issued_nodes.append(
-            make_node(
-                node_id=issued_id,
-                node_type="ISSUED_CONTENT",
-                number="01",
-                title=issued_title,
-                parent_id=main_id,
-                order=1,
-                original_text="\n".join(issued_lines),
-                source_location=SourceLocation(issued_start + 1, len(lines)),
-                scope_type="ISSUED_CONTENT",
-                metadata={
-                    "scope": issued_scope,
-                    "applicable_subjects": issued_subjects,
-                    "signals": issued_content_signals(lines, issued_start),
-                },
+        if is_appendix_catalog_only_section(issued_main_lines, issued_appendix_lines, issued_articles):
+            catalog_appendices = parse_real_appendices(issued_appendix_lines)
+            issued_nodes.extend(appendix_nodes(base_id, main_id, catalog_appendices, "MAIN", order_start=1))
+            issued_nodes.extend(reference_nodes(base_id, main_id, issued_lines, catalog_appendices, "MAIN"))
+            expected_issued_content = False
+            appendices_handled = True
+        else:
+            issued_id = f"{base_id}-ISSUED01"
+            issued_scope, issued_subjects = detect_scope_subjects_for_articles(issued_articles)
+            issued_nodes.append(
+                make_node(
+                    node_id=issued_id,
+                    node_type="ISSUED_CONTENT",
+                    number="01",
+                    title=issued_title,
+                    parent_id=main_id,
+                    order=1,
+                    original_text="\n".join(issued_lines),
+                    source_location=SourceLocation(issued_start + 1, len(lines)),
+                    scope_type="ISSUED_CONTENT",
+                    metadata={
+                        "scope": issued_scope,
+                        "applicable_subjects": issued_subjects,
+                        "signals": issued_content_signals(lines, issued_start),
+                    },
+                )
             )
-        )
-        issued_nodes.extend(article_nodes(base_id, issued_id, issued_articles, "ISSUED_CONTENT", order_start=1, prefix="ISSUED01"))
-        issued_appendices = parse_real_appendices(issued_appendix_lines)
-        issued_nodes.extend(appendix_nodes(base_id, issued_id, issued_appendices, "ISSUED01", order_start=1))
-        issued_nodes.extend(reference_nodes(base_id, issued_id, issued_lines, issued_appendices, "ISSUED01"))
+            issued_nodes.extend(article_nodes(base_id, issued_id, issued_articles, "ISSUED_CONTENT", order_start=1, prefix="ISSUED01"))
+            issued_appendices = parse_real_appendices(issued_appendix_lines)
+            issued_nodes.extend(appendix_nodes(base_id, issued_id, issued_appendices, "ISSUED01", order_start=1))
+            issued_nodes.extend(reference_nodes(base_id, issued_id, issued_lines, issued_appendices, "ISSUED01"))
 
-    if issued_start is None:
+    if issued_start is None and not appendices_handled:
         nodes.extend(appendix_nodes(base_id, main_id, parsed.appendices, "MAIN", order_start=1))
         nodes.extend(reference_nodes(base_id, main_id, lines, parsed.appendices, "MAIN"))
     nodes.extend(issued_nodes)
 
-    validation = validate_asset(nodes, expected_issued=issued_start is not None)
+    validation = validate_asset(nodes, expected_issued=expected_issued_content)
     asset = LegalKnowledgeAsset(
         schema_version=ASSET_SCHEMA_VERSION,
         document_number=parsed.document_number,
@@ -310,6 +319,36 @@ def split_issued_content_and_appendices(lines: list[str]) -> tuple[list[str], li
     if appendix_start is None:
         return lines, []
     return lines[:appendix_start], lines[appendix_start:]
+
+
+def is_appendix_catalog_only_section(
+    issued_main_lines: list[str],
+    issued_appendix_lines: list[str],
+    issued_articles: list[Article],
+) -> bool:
+    if not issued_appendix_lines or issued_articles:
+        return False
+    header_text = normalize_node_text("\n".join(issued_main_lines[:6]))
+    if not header_text:
+        return False
+    has_catalog_heading = bool(
+        re.search(r"\b(danh\s+mục|mẫu\s+biểu|biểu\s+mẫu)\b", header_text, flags=re.IGNORECASE)
+        and re.search(r"\b(phụ\s+lục|mẫu\s+biểu|biểu\s+mẫu)\b", header_text, flags=re.IGNORECASE)
+    )
+    if not has_catalog_heading:
+        return False
+    substantive_lines = [
+        line
+        for line in issued_main_lines
+        if line.strip()
+        and not ATTACHED_CONFIRMATION_RE.search(line)
+        and not APPENDIX_RE.match(line)
+        and not FORM_RE.match(line)
+    ]
+    if not substantive_lines:
+        return True
+    short_titles = sum(1 for line in substantive_lines if len(line.split()) <= 35 and "." not in line)
+    return short_titles == len(substantive_lines)
 
 
 def strip_attached_confirmation_lines(lines: list[str]) -> list[str]:
